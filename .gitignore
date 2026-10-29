@@ -1,0 +1,9 @@
+# Repos cloned into workspace — each is its own git repo
+Backend/
+Proto/
+iOS/
+Android/
+
+# OS
+.DS_Store
+Thumbs.db

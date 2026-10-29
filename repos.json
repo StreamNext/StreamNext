@@ -1,0 +1,16 @@
+{
+  "repos": [
+    {
+      "name": "Backend",
+      "url": "https://github.com/StreamNext/Backend.git",
+      "path": "Backend",
+      "description": "C#/.NET backend"
+    },
+    {
+      "name": "Proto",
+      "url": "https://github.com/StreamNext/Proto.git",
+      "path": "Proto",
+      "description": "OpenAPI contract + protobuf shared message types"
+    }
+  ]
+}
