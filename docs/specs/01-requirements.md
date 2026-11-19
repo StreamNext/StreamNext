@@ -22,7 +22,7 @@ One or two sentences describing what's implemented and its key business rule.
 Backend milestones, in build order. Each gets a `docs/features/*.md` spec via `/spec` right before it is implemented.
 
 ### M2 — Catalog
-Show search (TheTVDB proxy) and series detail with seasons and episodes, read through and cached in Postgres.
+Show search (TheTVDB proxy) and series detail with seasons and episodes, read through and cached in Postgres, in English and Spanish per the user's profile language. → [Feature spec](../features/catalog.md)
 
 ### M3 — Tracking
 Follow and unfollow shows with a list state (watching, planned, paused, dropped). Mark an episode, a season, or everything up to an episode as watched, and unwatch. "Up next" per show and across all shows, plus an upcoming-episodes calendar.
