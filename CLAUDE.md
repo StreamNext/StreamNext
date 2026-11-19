@@ -64,7 +64,7 @@ Write unit tests targeting ≥80% coverage on changed code. Tests must validate 
 **Phase 5 — Document**
 Update `docs/features/<feature>.md` — set Status to `implemented`, add or update Implementation notes, and append a dated Change log entry. Verify no regressions in adjacent behavior.
 
-See `.claude/commands/implement.md` for the full expanded workflow (multi-repo macro-phase sequencing, per-repo agent delegation, testing checklists), and `.claude/commands/resolve-defect.md` for the equivalent TDD-based workflow for bug fixes.
+See `.claude/commands/implement.md` for the full expanded workflow (multi-repo macro-phase sequencing, testing checklists), and `.claude/commands/resolve-defect.md` for the equivalent TDD-based workflow for bug fixes.
 
 **Version bump (undefined — decide on the first feature that ships)**
 

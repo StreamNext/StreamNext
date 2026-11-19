@@ -117,42 +117,26 @@ Ask any clarifying questions now. Do not proceed to Phase 2 until the user confi
 
 ## Step 6 — Phase 2: Locate & confirm
 
-State exactly which files/areas will change, per repo, based on Step 5's findings. **Wait for explicit user confirmation before any code is written.** This gate stays in this orchestrating session — it needs a live pause for human input, which a delegated agent (see Step 7) cannot do mid-task.
+State exactly which files/areas will change, per repo, based on Step 5's findings. **Wait for explicit user confirmation before any code is written.**
 
-## Step 7 — Phase 3 & 4: delegate implementation to a specialized agent per repo
+## Step 7 — Phase 3 & 4: implement directly, repo by repo
 
-Once confirmed, do not write the code in this session. Delegate each in-scope repo to its specialized agent via the `Agent` tool:
-
-| Repo in scope | Agent | subagent_type |
-|---|---|---|
-| `Backend/` | backend-dev | `backend-dev` |
-| `iOS/` | ios-dev | `ios-dev` |
-| `Android/` | android-dev | `android-dev` |
-| Contract (Macro Phase A, `Proto/openapi/v1/`) | — | no dedicated agent yet; handle inline in this session |
-
-**Delegate even when only one repo is in scope.** The point isn't just splitting up multi-repo work — a specialized agent carrying only that repo's conventions (layer order, test patterns, build quirks) consistently produces better-fitted code than this general session attempting every domain. Don't skip delegation for a "small" single-repo fix.
+Once confirmed, implement in this session — no delegation to a separate agent for this. Work through whichever repos Step 4 put in scope, one at a time:
 
 **Sequencing:**
-- Macro Phase A (Contract), if required, completes in this session first — small and infrequent enough not to warrant its own agent yet. Don't spawn `backend-dev` until the OpenAPI change is merged.
-- **Backend gates iOS/Android only when the feature depends on a new/changed endpoint shape.** In that case, spawn `backend-dev` alone first (foreground — the clients need its exact output), wait for its report, then spawn `ios-dev` and `android-dev` together in a single message once it's back, since neither blocks the other.
-- When the feature needs no new/changed backend surface (a client-only UI change), skip straight to that one agent — don't round-trip through backend for nothing.
+- Macro Phase A (Contract), if required, completes first — add/update the OpenAPI contract in `Proto/openapi/v1/`, lint it, commit, push, open the PR, and wait for it to actually merge before touching `Backend`.
+- **Backend gates iOS/Android only when the feature depends on a new/changed endpoint shape.** In that case, finish and verify the backend change first (including its own build/test pass), then move to the clients with the exact shape it produced. iOS and Android don't block each other.
+- When the feature needs no new/changed backend surface (a client-only UI change), go straight to that client.
 
-**Each agent's prompt must be self-contained** — it starts cold, with no memory of this conversation. Include:
-- The full spec/issue content (Overview, Business rules, API endpoints/UI interactions)
-- The file list this session identified in Step 6, as a starting point, not a constraint — the agent should deepen its own investigation (its own Phase 1) before writing code
-- Any locked decisions from an earlier macro phase (e.g. backend's reported endpoint shape, field names, error codes) that this repo's work must match
-- An explicit instruction to run that repo's Phase 4 testing checklist below before reporting done, and to author (not publish) that repo's version bump + changelog entry once this workspace's `CLAUDE.md` has defined what that means for this repo (see Phase 5's note — this is one of the things to pin down on the very first feature, not assume)
-- An explicit instruction to end with a structured report: files changed, tests run and their result, version bumped to what (once that convention exists), any ambiguity it resolved on its own and why, and each repo's actual merge posture (auto-merge vs. left open for manual merge — confirm which, per repo, the first time this matters, and record the answer in that repo's own `CLAUDE.md` so it's never re-asked)
+For each repo: read enough of its existing code to match its own conventions (layer order, test patterns, naming) before writing anything — don't assume Step 5's file list is complete; deepen it as you go. Run that repo's Phase 4 testing checklist below before moving to the next repo, and author (not publish) that repo's version bump + changelog entry once this workspace's `CLAUDE.md` has defined what that means for this repo (see Phase 5's note — this is one of the things to pin down on the very first feature, not assume). Follow each repo's own git workflow (from its `CLAUDE.md`) for committing/pushing/opening a PR, and record each repo's actual merge posture (auto-merge vs. left open for manual merge) in that repo's own `CLAUDE.md` the first time it matters, so it's never re-asked.
 
-Wait for each agent's report before treating that repo's phase as done. When relaying context forward to the next agent, pass only what it actually needs (e.g. the new endpoint's request/response shape) — not the full report verbatim.
-
-**Reconcile iOS and Android before moving to Phase 5, whenever both ran.** Once a business rule is implemented on two platforms, compare both agents' reports for any number, boolean, sign, or ordering a user could expect to match across platforms. If one computed something client-side that the other took from the server (or that should come from the server per the "shared business logic belongs on the backend" principle), stop and flag it to the user before Phase 5 — don't let two reports that quietly disagree both get marked done.
+**Reconcile iOS and Android before moving to Phase 5, whenever both ran.** Once a business rule is implemented on two platforms, compare what you built on each for any number, boolean, sign, or ordering a user could expect to match across platforms. If one computed something client-side that the other took from the server (or that should come from the server per the "shared business logic belongs on the backend" principle), stop and flag it to the user before Phase 5 — don't let two implementations that quietly disagree both get marked done.
 
 ---
 
 ## Phase 4 — Testing (expanded)
 
-This is the checklist each delegated agent runs for its own repo before reporting back — point it at the matching section in that agent's prompt rather than re-deriving it. Only the sections for repos actually in scope per Step 4 apply. These are starting conventions for a fresh project, not settled ones — the first few features through this workflow are where the *actual* test commands/patterns for each repo get established; update this file once they are, rather than leaving it describing intentions nobody's confirmed yet.
+Run this checklist yourself, per repo, before considering that repo's work done. Only the sections for repos actually in scope per Step 4 apply. These are starting conventions for a fresh project, not settled ones — the first few features through this workflow are where the *actual* test commands/patterns for each repo get established; update this file once they are, rather than leaving it describing intentions nobody's confirmed yet.
 
 ### Backend tests (`Backend/`, C#/.NET)
 
@@ -204,7 +188,7 @@ Same gating note as iOS — skip entirely while English is the only supported lo
 
 ## Phase 5 — Document (expanded)
 
-Once every in-scope repo agent has reported back, delegate this phase to the `spec-issues` agent in one pass — hand it every repo's final report (files changed, decisions, version numbers) rather than re-deriving them in this session. It owns the two parts below plus the GitHub issue end-state. This orchestrating session does a final verification (`gh issue view ...`) before telling the user the feature is done — see "Before finishing" below.
+Once every in-scope repo's implementation is done, do this directly in this session — the two parts below plus the GitHub issue end-state. Finish with a final verification (`gh issue view ...`) before telling the user the feature is done — see "Before finishing" below.
 
 ### Feature spec (`docs/features/<feature>.md`)
 

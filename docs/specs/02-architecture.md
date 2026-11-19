@@ -28,7 +28,7 @@ docs/specs/ → Proto (OpenAPI + protobuf) → Backend (C#)
 | Transport | REST + JWT | Decided — no RPC framework; any client needs nothing special to call it |
 | API contract | OpenAPI (`Proto/openapi/v1/`) | Hand-authored, PR-reviewed, consumed by all clients' codegen at build time |
 | Language | C#/.NET | Decided |
-| Architecture | TBD | CQRS + MediatR is a reasonable default (see `backend-dev` agent); not yet confirmed as this project's actual convention |
+| Architecture | TBD | CQRS + MediatR is a reasonable default (see "Backend layer order" below); not yet confirmed as this project's actual convention |
 | Data access | TBD | EF Core is a reasonable default for C#; not yet confirmed |
 | Database | TBD | |
 | Deployment | TBD | |
@@ -47,7 +47,20 @@ Plain REST end to end, by decision — there is no second transport to reconcile
 
 ## Backend layer order
 
-See the `backend-dev` agent (`.claude/agents/backend-dev.md`) for the current suggested layer order — this section should be filled in with the *confirmed* convention once the first feature has gone through it, rather than duplicating a still-tentative suggestion here.
+Suggested starting order for a new feature — **tentative**: confirm or adjust it once the first feature has gone through it, and write the confirmed version into `Backend/CLAUDE.md`.
+
+1. **Contract** — the endpoint is defined in `Proto/openapi/v1/` first, hand-authored, not generated from the backend's code.
+2. **Domain + Infrastructure** — entity/model, a repository abstraction, and its data-access implementation (EF Core is a reasonable default for C#).
+3. **Application** — command/query + handler, with unit tests against a mocked repository (no live DB in unit tests). CQRS (one handler per command/query) is a reasonable default, not mandatory.
+4. **Api** — the HTTP endpoint, wired to the application layer.
+
+Decisions worth making on the first feature and writing into `Backend/CLAUDE.md` so they are never re-decided:
+- **Errors:** one exception-to-HTTP-status mapping applied from the first endpoint (e.g. typed not-found/forbidden/already-exists/invalid-argument exceptions mapped by one middleware), so every endpoint's error shape is the same.
+- **Tests:** one test framework and one mocking library (xUnit and NSubstitute are common defaults). NSubstitute returns `null`, not an empty collection, for an unconfigured `Task<List<T>>` method, so code reading a repo result should defensively `?? []`.
+- **Migrations:** EF Core Migrations or hand-written SQL applied by a separate migrator. Pick one.
+- **Connections:** a distinct `application_name` (or the DB's equivalent) on every DB connection from day one; cheap now, painful to retrofit.
+- **Logging:** every non-trivial path logs with the IDs that matter, and no exception is swallowed silently.
+- **Version bump, release notes and git/merge workflow:** undefined until the first feature ships; write them into the repo's `CLAUDE.md` once settled.
 
 ## Key backend constraints
 
@@ -57,7 +70,25 @@ See the `backend-dev` agent (`.claude/agents/backend-dev.md`) for the current su
 
 ## Key client constraints
 
-<!-- Same note — fill in as iOS/Android conventions get established. -->
+<!-- Fill in as iOS/Android conventions get established. The starting points below are tentative, not settled. -->
+
+**Both clients**
+- REST against the OpenAPI contract, with a client generated from `Proto/openapi/v1/` rather than hand-written request/response types. If `Proto` also carries shared `.proto` message types, decide once whether the clients use them directly or map REST responses into them, and make iOS and Android match.
+- MVVM, one screen and one view model per feature screen, written so a screen's design reads the same on both platforms. Test the view model directly against a fake data layer, not through full integration. Don't unit test pure layout.
+- Verify UI with test assertions (XCUITest / Compose test rules), never screenshots, which burn context.
+- Version numbers: each platform has a monotonic build number and a user-visible version. Decide one bump convention (build number every feature, user-visible version only at an intentional release) and apply it to both. Mobile repos commonly leave the PR open for a human to merge after a build check rather than auto-merging; confirm per repo.
+
+**iOS (SwiftUI)**
+- Build and test with `xcodebuild build|test -scheme StreamNext -destination 'platform=iOS Simulator,name=<device>'`, prefixed with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` if it says it "requires Xcode". If the REST client comes from an SPM build plugin (e.g. `swift-openapi-generator`), unattended builds need `-skipPackagePluginValidation`.
+- Swift Testing (`@Test`/`#expect`) is a reasonable default. UI smoke tests need a live local backend and test credentials; fall back to `build-for-testing` and say so if none is reachable.
+- SPM local packages auto-glob, so a new file in an existing package needs no `project.pbxproj` change. Adding or removing an actual SPM dependency touches five sections (`PBXBuildFile`, Frameworks build phase, per-target `packageProductDependencies`, top-level `packageReferences`, and the `XCRemoteSwiftPackageReference`/`XCSwiftPackageProductDependency` definitions); check with `plutil -lint` and a brace count after each pass.
+- Never quit a running Xcode to clear stale state without asking.
+
+**Android (Kotlin, Jetpack Compose)**
+- `./gradlew build`, `./gradlew test` (JVM unit tests), `./gradlew connectedAndroidTest` (needs an emulator or device; otherwise confirm the target compiles and say so), `./gradlew lintDebug`.
+- `ViewModel` with `StateFlow`/Compose state; one DI approach (Hilt or manual constructor injection) chosen early and used consistently.
+- JUnit5 or Kotest for view-model tests; Compose tests (`createComposeRule`, `onNodeWithText(...).assertExists()`) for a core-flow smoke test.
+- `versionCode` plays the build-number role and `versionName` the user-visible one.
 
 ## Shared business logic belongs on the backend
 
@@ -67,4 +98,4 @@ This does not apply to pure display/presentation logic (row coloring, sort-order
 
 ## Feature development process
 
-See `CLAUDE.md` for the full 5-phase workflow, and `.claude/commands/implement.md` for the expanded macro-phase sequencing (Contract → Backend → iOS/Android, independently) and per-repo agent delegation.
+See `CLAUDE.md` for the full 5-phase workflow, and `.claude/commands/implement.md` for the expanded macro-phase sequencing (Contract → Backend → iOS/Android, independently).

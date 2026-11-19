@@ -6,7 +6,7 @@ Diagnose and fix a defect using a test-driven, red-green loop: understand → lo
 
 **Examples:** `/resolve-defect "login crashes when the token refresh overlaps with a logout"` · `/resolve-defect #94`
 
-This is `/implement`'s sibling for bugs, not new features: same multi-repo awareness, same delegation to specialized agents, same documentation/versioning discipline at the end — but the middle of the workflow is a TDD loop (a failing test proves the bug and later proves the fix) instead of a 5-phase build.
+This is `/implement`'s sibling for bugs, not new features: same multi-repo awareness, same documentation/versioning discipline at the end — but the middle of the workflow is a TDD loop (a failing test proves the bug and later proves the fix) instead of a 5-phase build.
 
 ---
 
@@ -71,44 +71,36 @@ Investigate the actual code to find where the defect lives, across whichever lay
 
 **A real possible outcome of this phase is "there is no code defect here."** Sometimes the report is a data problem (bad/duplicate rows), a configuration issue, or expected behavior the user didn't anticipate. If investigation leads there, stop and say so plainly instead of forcing Phase 3 to invent a test for a bug that doesn't exist in code — that's a different conversation (data cleanup, a product decision, user education), not a TDD loop.
 
-Once you have a confirmed root cause: **state exactly which file(s)/function(s) are wrong and why, and wait for explicit user confirmation before writing any test or code.** This gate stays in this orchestrating session — a delegated agent can't pause mid-task for human input.
+Once you have a confirmed root cause: **state exactly which file(s)/function(s) are wrong and why, and wait for explicit user confirmation before writing any test or code.**
 
 ## Phase 3 — Red: write a failing test
 
-Once confirmed, delegate the rest (Phases 3–5, the actual TDD loop) to the specialized agent for the repo in scope:
-
-| Repo in scope | Agent |
-|---|---|
-| `Backend/` | `backend-dev` |
-| `iOS/` | `ios-dev` |
-| `Android/` | `android-dev` |
-
-**Delegate even for a one-line fix** — same reasoning as `/implement`: a specialized agent carrying that repo's test conventions and build quirks does this more reliably than a general session. If more than one repo is genuinely in scope (per Step 2), spawn their agents together in one message — neither blocks the other for a defect fix the way backend can gate a client for a new endpoint in a feature.
-
-**Each agent's prompt must be self-contained** (it starts cold) and must instruct it to run this exact loop, not just "fix the bug":
+Once confirmed, run this exact loop yourself, directly in this session, in whichever repo(s) Step 2 found in scope — not just "fix the bug":
 
 1. Write one or more tests that encode the **correct** expected behavior, following that repo's existing test conventions and patterns for the affected area (or establishing a sensible one if none exists yet for this area — this is a fresh codebase).
 2. Run the test(s) and **confirm they fail** before touching any fix. A test that passes immediately against unfixed code doesn't capture the defect — revise the test (or, if no revision makes it fail, stop and report that the diagnosis may be wrong rather than forcing a fix with no test backing it).
 3. **Apply the fix** — the smallest change that makes the test pass. Don't refactor unrelated code or add speculative abstractions while in here; a defect fix is not a cleanup pass.
 4. Re-run the new test(s): must now pass (green).
-5. Run that repo's **full** existing test suite (not just the new test) to confirm no regression. If the full suite breaks something else, the fix's scope is probably wrong — reconsider Phase 4, don't just patch around the new failure.
-6. **If the new test still fails after the fix, return to writing the test** — reconsider whether it actually encodes the expected behavior and whether the diagnosis (the file/function identified in Phase 2) was correct; adjust the test and/or the fix, then re-run. Loop until genuinely green, not until the test is weakened enough to pass.
+5. Run that repo's **full** existing test suite (not just the new test) to confirm no regression. If the full suite breaks something else, the fix's scope is probably wrong — reconsider, don't just patch around the new failure.
+6. **If the new test still fails after the fix, return to step 1** — reconsider whether it actually encodes the expected behavior and whether the diagnosis (the file/function identified in Phase 2) was correct; adjust the test and/or the fix, then re-run. Loop until genuinely green, not until the test is weakened enough to pass.
 
-Also instruct the agent to: author (not publish) that repo's version bump + changelog entry once this workspace has defined what that means for this repo (see `/implement`'s Phase 5 note on this — it's undefined until the first feature through that workflow pins it down), and end with a structured report — files changed, the test(s) added and their before/after result, the fix applied, full-suite result, version bumped to what (once that convention exists).
+If more than one repo is genuinely in scope (per Step 2), run this loop in each — neither blocks the other for a defect fix the way backend can gate a client for a new endpoint in a feature.
+
+Author (not publish) that repo's version bump + changelog entry once this workspace has defined what that means for this repo (see `/implement`'s Phase 5 note on this — it's undefined until the first feature through that workflow pins it down), once the loop is green.
 
 ## Phase 4 — Green: the fix
 
-Covered inside the Phase 3 delegation above — the agent applies the fix as step 3 of that same loop. Nothing additional happens in this orchestrating session; this phase exists as a heading only so the loop's five named steps are traceable 1:1 against this file.
+Covered inside the Phase 3 loop above — step 3 of that same loop. This phase exists as a heading only so the loop's five named steps are traceable 1:1 against this file.
 
 ## Phase 5 — Verify
 
-Also covered inside the Phase 3 delegation (steps 4–6). Wait for each agent's report before treating that repo's phase as done.
+Also covered inside the Phase 3 loop (steps 4–6).
 
-**If both iOS and Android were in scope, reconcile their reports** before moving on — same check `/implement` runs: compare any number, boolean, sign, or ordering a user could expect to match across platforms, and flag it before Phase 6 if they quietly disagree.
+**If both iOS and Android were in scope, reconcile what you built in each** before moving on — same check `/implement` runs: compare any number, boolean, sign, or ordering a user could expect to match across platforms, and flag it before Phase 6 if they quietly disagree.
 
 ## Phase 6 — Document & close
 
-Once every in-scope agent has reported back:
+Once the fix is verified in every in-scope repo:
 
 ### Feature doc, if this defect belongs to one
 
