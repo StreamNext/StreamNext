@@ -10,8 +10,8 @@ The actual code lives in repos cloned inside this directory:
 
 | Folder | Repo | Purpose |
 |---|---|---|
-| `Backend/` | StreamNext/Backend | C#/.NET REST + JWT API server |
-| `Proto/` | StreamNext/Proto | API contracts: OpenAPI (REST transport) + protobuf (shared client message types, if/when needed) |
+| `Backend/` | StreamNext/Backend | Go REST + JWT API server + scheduled jobs |
+| `Proto/` | StreamNext/Proto | API contracts: OpenAPI (REST transport) + protobuf shared message types, pushed to BSR `buf.build/streamnext` |
 | `iOS/` | StreamNext/iOS | SwiftUI native iOS app *(repo not created yet)* |
 | `Android/` | StreamNext/Android | Kotlin/Compose native Android app *(repo not created yet)* |
 
@@ -93,12 +93,17 @@ At the end of every completed response, always include:
 
 ## Project context
 
-<!-- Uncomment each line once that spec file has real content worth auto-loading every session:
+StreamNext is a TV show tracker (movies later): follow shows, mark episodes watched, get push alerts for airing, renewed and ended shows, spoiler-gated episode threads, analytics, and discovery. Show data comes from TheTVDB v4 with a licensed key, cached server-side.
+
+Stack: Go backend (oapi-codegen, sqlc + pgx, goose), PostgreSQL on Neon, GCP Cloud Run + Cloud Scheduler, sops (age) for secrets, FCM push, Resend email, GIPHY, Vercel for the website. Testing: `go test` + testcontainers with a 90% coverage gate, and Bruno for API integration runs.
+
+WellSpent (`~/WellSpent`) is a **behavioural reference only** (auth flow, sops setup). StreamNext is a new codebase; don't copy WellSpent code.
+
+Specs:
 @docs/specs/00-overview.md
 @docs/specs/01-requirements.md
 @docs/specs/02-architecture.md
 @docs/specs/03-data-model.md
--->
 
 ## Feature logic
 
@@ -106,8 +111,10 @@ At the end of every completed response, always include:
 
 ## Sub-repo context
 
-<!-- @Backend/CLAUDE.md
+@Backend/CLAUDE.md
 @Proto/CLAUDE.md
+
+<!-- Uncomment once those repos exist and have a CLAUDE.md:
 @iOS/CLAUDE.md
 @Android/CLAUDE.md
-Uncomment each line once that repo exists and has a CLAUDE.md to import. -->
+-->

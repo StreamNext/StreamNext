@@ -4,13 +4,13 @@
       "name": "Backend",
       "url": "https://github.com/StreamNext/Backend.git",
       "path": "Backend",
-      "description": "C#/.NET backend"
+      "description": "Go REST + JWT API server (OpenAPI via oapi-codegen, sqlc/pgx, goose)"
     },
     {
       "name": "Proto",
       "url": "https://github.com/StreamNext/Proto.git",
       "path": "Proto",
-      "description": "OpenAPI contract + protobuf shared message types"
+      "description": "OpenAPI REST contract + protobuf shared message types (BSR: buf.build/streamnext)"
     }
   ]
 }

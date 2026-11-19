@@ -7,16 +7,27 @@ Multi-repo, spec-driven — same shape as the workspace tooling itself:
 ```
 StreamNext (workspace root)
   ├── docs/specs/   ← product specs and requirements
-  ├── Proto/        ← OpenAPI (REST contract) + protobuf (shared client types, if needed)
-  ├── Backend/      ← C#/.NET REST + JWT API server
+  ├── Proto/        ← OpenAPI (REST contract) + protobuf shared message types (BSR)
+  ├── Backend/      ← Go REST + JWT API server + scheduled jobs
   ├── iOS/          ← SwiftUI native iOS app (not created yet)
   └── Android/      ← Kotlin/Compose native Android app (not created yet)
 ```
 
 ```
-docs/specs/ → Proto (OpenAPI + protobuf) → Backend (C#)
-                                                   ↑
-                                     iOS / Android (REST calls)
+docs/specs/ → Proto (OpenAPI + protobuf) → Backend (Go)
+                                                ↑
+                              iOS / Android / web (REST calls)
+```
+
+Runtime:
+
+```
+iOS / Android / Vercel web ──REST+JWT──▶ Cloud Run service: api (cmd/server)
+                                            │  pgx ▶ Neon Postgres
+                                            │  read-through cache ▶ TheTVDB v4
+Cloud Scheduler ─▶ Cloud Run Jobs:
+   tvdb-sync   (hourly)   /updates diff ▶ upsert ▶ notifications (renewed / ended / new episodes)
+   air-alerts  (15 min)   episodes airing soon for followed shows ▶ FCM
 ```
 
 ## Tech stack
@@ -26,12 +37,20 @@ docs/specs/ → Proto (OpenAPI + protobuf) → Backend (C#)
 | Concern | Choice | Why |
 |---|---|---|
 | Transport | REST + JWT | Decided — no RPC framework; any client needs nothing special to call it |
-| API contract | OpenAPI (`Proto/openapi/v1/`) | Hand-authored, PR-reviewed, consumed by all clients' codegen at build time |
-| Language | C#/.NET | Decided |
-| Architecture | TBD | CQRS + MediatR is a reasonable default (see "Backend layer order" below); not yet confirmed as this project's actual convention |
-| Data access | TBD | EF Core is a reasonable default for C#; not yet confirmed |
-| Database | TBD | |
-| Deployment | TBD | |
+| API contract | OpenAPI 3.0 (`Proto/openapi/v1/streamnext.yaml`) | Hand-written and PR-reviewed. The backend generates its server interface from it with oapi-codegen (`std-http-server`); clients generate their own. |
+| Shared types | protobuf messages/enums (`Proto/streamnext/v1/`) | Messages only, no `service` blocks. Pushed to BSR `buf.build/streamnext/streamnext` for client codegen |
+| Language | Go | Decided |
+| Architecture | `rest` (handlers) → `service` → `repository` | Services take repository interfaces, so they can be unit tested with mocks |
+| Data access | sqlc + pgx v5 | SQL is hand-written and type-checked at generate time |
+| Migrations | goose, SQL files in `internal/db/migrations` | Run by `cmd/migrate` before each deploy |
+| Database | PostgreSQL 16. **Dev:** a standalone StreamNext container (`Backend/docker-compose.db.yml`, own volume, port 5433) started once on the LAN dev host, separate from WellSpent's Postgres. **Tests:** throwaway containers (testcontainers, compose). **Prod:** Neon (later). | Neon via the **direct** (non-pooler) URL. The dev DB is fully defined in the repo, so it can be recreated from scratch on any machine. |
+| Secrets | sops + age, `<env>.enc.env` committed (the `.env` suffix is what lets `sops exec-env` detect the format) | CI decrypts with `SOPS_AGE_KEY`; critical secrets go to GCP Secret Manager |
+| Deployment | GCP Cloud Run (service + jobs), Artifact Registry, Cloud Scheduler | GitHub Actions authenticates through Workload Identity Federation |
+| Push | Firebase Cloud Messaging, for iOS and Android | One sender; FCM forwards to APNs |
+| Email | Resend | Verification and password reset |
+| Show data | TheTVDB v4 (licensed project key) | The server caches what it needs; clients never call TheTVDB directly |
+| GIFs | GIPHY | The API key stays on the server; we store only GIF ids |
+| Testing | `go test` + testify, testcontainers-go (Postgres), Bruno (`bru run`) | Coverage gate at 90% on `internal/` |
 
 ### iOS
 
@@ -43,30 +62,38 @@ Kotlin, Jetpack Compose, REST via an OpenAPI-generated client + Retrofit/Ktor ag
 
 ## Transport
 
-Plain REST end to end, by decision — there is no second transport to reconcile. If `Proto` carries `.proto` files, those are shared *message-type* definitions only (for cross-platform codegen convenience), never a live RPC surface — don't add `service`/`rpc` blocks expecting something to implement them.
+Plain REST end to end, by decision — there is no second transport to reconcile. `Proto`'s `.proto` files are shared *message-type* definitions only (for cross-platform codegen convenience), never a live RPC surface — don't add `service`/`rpc` blocks expecting something to implement them.
 
 ## Backend layer order
 
-Suggested starting order for a new feature — **tentative**: confirm or adjust it once the first feature has gone through it, and write the confirmed version into `Backend/CLAUDE.md`.
+Order for a new feature (confirm on the first feature, then record it in `Backend/CLAUDE.md`):
 
-1. **Contract** — the endpoint is defined in `Proto/openapi/v1/` first, hand-authored, not generated from the backend's code.
-2. **Domain + Infrastructure** — entity/model, a repository abstraction, and its data-access implementation (EF Core is a reasonable default for C#).
-3. **Application** — command/query + handler, with unit tests against a mocked repository (no live DB in unit tests). CQRS (one handler per command/query) is a reasonable default, not mandatory.
-4. **Api** — the HTTP endpoint, wired to the application layer.
+1. **Contract** — define the endpoint in `Proto/openapi/v1/streamnext.yaml` first, by hand; it is never generated from backend code. Regenerate `gen/` in Backend.
+2. **Migration + queries** — a goose migration in `internal/db/migrations`, sqlc queries in `internal/db/query`, then `sqlc generate`.
+3. **Repository** — an interface the service consumes, implemented over sqlc. Tested against real Postgres with testcontainers.
+4. **Service** — the business rules, unit tested with mocked repositories (no live DB).
+5. **REST handler** — implements the generated server interface and maps between contract types and service calls. Tested with `httptest`.
+6. **Bruno** — add or extend requests in `Backend/bruno/` for the new endpoints.
 
-Decisions worth making on the first feature and writing into `Backend/CLAUDE.md` so they are never re-decided:
-- **Errors:** one exception-to-HTTP-status mapping applied from the first endpoint (e.g. typed not-found/forbidden/already-exists/invalid-argument exceptions mapped by one middleware), so every endpoint's error shape is the same.
-- **Tests:** one test framework and one mocking library (xUnit and NSubstitute are common defaults). NSubstitute returns `null`, not an empty collection, for an unconfigured `Task<List<T>>` method, so code reading a repo result should defensively `?? []`.
-- **Migrations:** EF Core Migrations or hand-written SQL applied by a separate migrator. Pick one.
-- **Connections:** a distinct `application_name` (or the DB's equivalent) on every DB connection from day one; cheap now, painful to retrofit.
-- **Logging:** every non-trivial path logs with the IDs that matter, and no exception is swallowed silently.
-- **Version bump, release notes and git/merge workflow:** undefined until the first feature ships; write them into the repo's `CLAUDE.md` once settled.
+Decisions recorded up front:
+- **Errors:** typed errors in `internal/apperr` (not-found, forbidden, conflict, invalid-argument, unauthenticated), mapped to HTTP status in one place. Error body is lowercase `{"code","message"}` exactly as in the contract.
+- **Connections:** every process sets its own `application_name` (`streamnext-api`, `streamnext-tvdb-sync`, …).
+- **Logging:** zap, structured. Every non-trivial path logs the IDs that matter, and no error is swallowed silently.
+- **Version bump, release notes and git/merge workflow:** decided in M0 and written into `Backend/CLAUDE.md`.
 
 ## Key backend constraints
 
-<!-- Fill in as real constraints get discovered/decided — e.g. a database connection
-     pooling gotcha, an auth token lifetime decision, a rate-limit. Empty is honest
-     for a repo with no code yet; don't invent constraints that don't exist. -->
+- **TheTVDB licensing:** we have a licensed project key, so the backend may cache TheTVDB data and serve it to all users. Clients never call TheTVDB directly.
+- **TheTVDB `/updates`:** `since` must be less than 90 days ago. If the sync cursor is older, re-fetch every tracked series instead.
+- **TheTVDB status:** the only values are Continuing, Ended and Upcoming. "Renewed" is derived from a new season record or Ended→Continuing. "Cancelled" can't be told apart from "Ended".
+- **Air times:** TheTVDB air times are local to the series' country (its capital or most populous city); for streaming services they are the official release time. Converting to UTC needs a country→timezone map.
+- **Auth tokens:**
+  - The access JWT (HS256) lasts 15 minutes.
+  - The refresh token is opaque, stored as a SHA-256 hash, bound to a `deviceId`, and rotated on every refresh.
+  - Reusing a revoked refresh token revokes every token the user has.
+  - Refresh lifetime is 24h, or 90d with remember-me and for social sign-in.
+  - A short grace window covers a client that lost a rotated refresh response.
+- **Neon:** use the direct (non-pooler) URL. pgx and PgBouncer transaction pooling don't mix.
 
 ## Key client constraints
 

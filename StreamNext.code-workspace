@@ -3,6 +3,14 @@
     {
       "name": "StreamNext (workspace root)",
       "path": "."
+    },
+    {
+      "name": "Backend",
+      "path": "Backend"
+    },
+    {
+      "name": "Proto",
+      "path": "Proto"
     }
   ],
   "settings": {}
