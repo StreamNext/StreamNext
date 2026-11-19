@@ -36,11 +36,9 @@ Everything after this builds on the catalog: tracking (M3), sync and notificatio
 
 **Series and episodes** (`GET /v1/series/{seriesId}`, `GET /v1/series/{seriesId}/episodes`)
 - **Ids:** `seriesId` is TheTVDB's integer id, used as our primary key too, so sync and imports need no mapping table.
-- **Read-through:** if the series is stored and was synced in the last **24 hours**, it is served from Postgres. Otherwise the server fetches the extended record (`meta=translations`, `short=true`) and every page of episodes in the series' default order, replaces the stored copy **in one transaction**, then answers.
-- **Failures:**
-  - If TheTVDB fails but a stored copy exists, the stored copy is served; `syncedAt` tells clients how old it is.
-  - With no stored copy, the answer is 503.
-  - An id TheTVDB doesn't know is 404.
+- **Fetch on miss only:** a stored series is always served from Postgres, and the API never refreshes it during a request. A series that isn't stored is fetched (the extended record with `meta=translations` and `short=true`, plus every page of episodes in the series' default order), stored **in one transaction**, then served.
+- **Freshness is the sync job's job** (see below), not the API's.
+- **Failures:** a stored series never depends on TheTVDB being up. For one that isn't stored, a TheTVDB failure is 503, and an id TheTVDB doesn't know is 404. `syncedAt` tells clients when the copy was last refreshed.
 - **What is stored for a series:**
   - Name and overview in English and Spanish where TheTVDB has them, with the original-language name and overview kept alongside.
   - Status: `Continuing`, `Ended` and `Upcoming` map to `continuing`, `ended` and `upcoming`; anything else is `unknown`.
@@ -53,6 +51,14 @@ Everything after this builds on the catalog: tracking (M3), sync and notificatio
 - **Vanished episodes:** a refresh replaces the episode list, so episodes TheTVDB no longer lists are removed. *M3 must decide how this interacts with watch history before anything references episodes.*
 - **Duplicate fetches:** two simultaneous first requests for the same series both fetch it; the second write is identical, so this is allowed. *shortcut: no request coalescing; add it if TheTVDB usage becomes a problem.*
 - **Episodes endpoint:** `?season=N` limits it to one season. Without it, all episodes come back in season and episode order.
+
+**Sync job** (`cmd/jobs/tvdb-sync`): keeps every stored series fresh, so the API never has to.
+- **What it reads:** TheTVDB's `/updates?since=<cursor>` for the record types we store: `series`, `seasons`, `episodes`, `translatedseries`, `translatedepisodes`. It follows every page.
+- **What it refreshes:** only series **we have stored**; everything else in the feed is ignored. Each affected series is re-fetched in full through the same code as a first fetch and replaced in one transaction, so episode additions, edits and deletions all land.
+- **Deletions:** a series TheTVDB deleted is removed from our copy. If it was merged into another (`mergeToId`), the target is fetched instead. *M3 must revisit this once watch history references episodes.*
+- **Cursor:** stored in `sync_state` and only advanced after a fully successful run (to that run's start time, minus a small safety margin), so a failed run is simply repeated. TheTVDB refuses a `since` older than 90 days, so a cursor that old (or none) means re-fetching every stored series once and starting fresh.
+- **Running it:** locally with `make tvdb-sync ENV=dev`; hourly by Cloud Scheduler once deployment exists (on hold).
+- **Concurrent writes:** the job and an API miss can write the same series at once. Both write a full, consistent copy in one transaction, so the last one wins harmlessly.
 
 **Access**
 - **Sign-in required:** every catalog endpoint requires a bearer token, so our licensed key can't be used as an open proxy. The global rate limit applies.
@@ -79,6 +85,7 @@ Migration `00005_catalog`. Catalog rows use TheTVDB's ids (`bigint`) as primary 
   - Origin and runtime: `original_country`, `original_language`, `network`, `average_runtime`.
   - Bookkeeping: `tvdb_updated_at`, `synced_at`.
 - **`genre`:** `id`, `name`, `slug`. **`series_genre`:** `(series_id, genre_id)`.
+- **`sync_state`:** `key` PK, `value`, `updated_at`; holds the `/updates` cursor.
 - **`season`:** `id`, `series_id`, `number`, `name`, `image`.
 - **`series_translation`:** `(series_id, language)` PK, `name`, `overview`.
 - **`episode`:** `id`, `series_id`, `season_number`, `number`, `absolute_number`, `original_name`, `original_overview`, `aired` (date), `runtime`, `image`, `finale_type`.
@@ -89,8 +96,9 @@ Migration `00005_catalog`. Catalog rows use TheTVDB's ids (`bigint`) as primary 
 - **TheTVDB client:** `httptest` with fixtures **recorded once from the real API** with our key. They are trimmed to the fields we use, and descriptive text (overviews) is replaced by placeholders, because the repo is public and we must not republish TheTVDB's content.
   - Covers login, token renewal on 401, pagination, translations, 404 vs 5xx, malformed bodies, timeouts.
 - **Live check (opt-in):** `make tvdb-live` (a build-tagged test) against the real API with the key from sops, to catch API drift. Not run in CI unless a secret is added later.
-- **Service:** in-memory fakes. Covers read-through, the 24h freshness rule, serving stale copies on failure, 404 vs 503, status mapping, and the language fallback (Spanish, then English, then original), including the genre name map.
-- **Repository:** Postgres tests. Covers replace-in-one-transaction, vanished episodes removed, genres, cascade.
+- **Service:** in-memory fakes. Covers fetch-on-miss, stored series served with TheTVDB down, 404 vs 503, status mapping, and the language fallback (Spanish, then English, then original), including the genre name map.
+- **Repository:** Postgres tests. Covers replace-in-one-transaction, vanished episodes removed, genres, cascade, the sync cursor.
+- **Sync job:** fakes plus an `httptest` TheTVDB. Covers only stored series refreshed, paging, the cursor advancing only after success, the 90-day fallback, deletion and merge, and a rerun after a failure doing no harm.
 - **REST:** handlers, sign-in required (contract-driven), `int64` path parameter binding, query validation.
 - **Bruno:** the CI compose stack runs a small TheTVDB stub (`cmd/tvdbstub`, serving the same fixtures), so search, detail and episodes run end to end without the real key, in both languages (switching the profile to `es` changes the names returned).
 - **Fixtures:** recorded with the standard Go golden-file pattern: `go test -tags tvdblive ./internal/tvdb -update` calls the real API, trims, replaces text with per-language placeholders, and writes `testdata/`. This is also the live drift check.
@@ -108,9 +116,10 @@ Migration `00005_catalog`. Catalog rows use TheTVDB's ids (`bigint`) as primary 
 1. **Language:** English and Spanish now, chosen per user on the profile, with the fallback Spanish/English → English → original (chosen 2026-11-19).
 2. **Catalog requires sign-in** (chosen 2026-11-19).
 3. **Fixtures:** real responses, trimmed, with placeholder text (chosen 2026-11-19).
-4. **24h freshness** for series detail until M4's sync job keeps followed series current (proposed default).
+4. **Fetch on miss + a separate sync job** (option B, chosen 2026-11-19): the API never refreshes in a request; `tvdb-sync` applies `/updates` to stored series. No full mirror of TheTVDB: it costs infrastructure for data nobody asked for, and people mostly watch recent shows.
 5. **Images:** TheTVDB URLs passed through (proposed default); proxying and caching our own copies can come later.
 6. **Profile language** defaults to `en` and is changed with `PATCH /v1/me` (proposed default); clients set it from the device locale right after sign-up.
+7. **Discovery is not part of the catalog** (chosen 2026-11-19): M7 gets its own job, logic and tables. The catalog stores only series someone opened or followed.
 
 ## Implementation notes
 <!-- Filled in after implementation (Phase 5) -->
@@ -118,3 +127,4 @@ Migration `00005_catalog`. Catalog rows use TheTVDB's ids (`bigint`) as primary 
 ## Change log
 - 2026-11-19: Initial spec (@mauro)
 - 2026-11-19: Decisions: English + Spanish per user, sign-in required, trimmed real fixtures
+- 2026-11-19: Option B: fetch on miss, `tvdb-sync` job brought forward from M4; discovery kept separate

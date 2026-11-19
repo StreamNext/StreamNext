@@ -22,13 +22,13 @@ One or two sentences describing what's implemented and its key business rule.
 Backend milestones, in build order. Each gets a `docs/features/*.md` spec via `/spec` right before it is implemented.
 
 ### M2 — Catalog
-Show search (TheTVDB proxy) and series detail with seasons and episodes, read through and cached in Postgres, in English and Spanish per the user's profile language. → [Feature spec](../features/catalog.md)
+Show search (TheTVDB proxy) and series detail with seasons and episodes, read through and cached in Postgres, in English and Spanish per the user's profile language. Stored series are served from Postgres only; a separate hourly `tvdb-sync` job applies TheTVDB's `/updates` to them. → [Feature spec](../features/catalog.md)
 
 ### M3 — Tracking
 Follow and unfollow shows with a list state (watching, planned, paused, dropped). Mark an episode, a season, or everything up to an episode as watched, and unwatch. "Up next" per show and across all shows, plus an upcoming-episodes calendar.
 
-### M4 — Sync + notifications
-An hourly job applies TheTVDB `/updates` to cached shows and raises **renewed** (a new season, or Ended→Continuing) and **ended** (Continuing→Ended) events. TheTVDB has no separate "cancelled" status. A 15-minute job sends airing-soon alerts. Push goes through FCM on both platforms, with an in-app inbox and per-user and per-show preferences.
+### M4 — Notifications
+Builds on M2's `tvdb-sync` job: compare each refreshed series with its previous state to raise **renewed** (a new season, or Ended→Continuing) and **ended** (Continuing→Ended) events. TheTVDB has no separate "cancelled" status. A 15-minute job sends airing-soon alerts, using the series' country to turn air times into UTC. Push goes through FCM on both platforms, only to devices with a live refresh token, with an in-app inbox and per-user and per-show preferences.
 
 ### M5 — Episode threads
 Posts with one level of replies, reactions, edit and delete, and reports (a post is auto-hidden after N reports). GIFs come from GIPHY. A thread is readable and postable only after the user has watched the episode or unlocked spoilers for that one episode; the unlock is remembered.
@@ -37,7 +37,11 @@ Posts with one level of replies, reactions, edit and delete, and reports (a post
 Total shows, episodes and minutes watched; completed shows; a monthly trend; top genres and networks.
 
 ### M7 — Discovery
-Similar shows and "for you" picks, scored by genre overlap, shared network, and how often other users follow both shows.
+A separate feature with its own weekly job, logic and tables; the catalog is not mirrored for it.
+- **v1, the same for everyone:** ranked lists per genre, favoring continuing, upcoming and recently aired shows (people mostly watch recent things).
+- **Seeding:** TheTVDB's `/series/filter`, sorted by score. It requires an origin country and language, so candidates are seeded per market (for example US/UK English, Spanish-speaking countries, Korea, Japan); which markets is a product decision for this milestone.
+- **Storage:** candidates hold only what a list needs (name, image, year, genres, score, in English and Spanish). Opening one goes through the catalog's fetch-on-miss.
+- **Later, if usage grows:** personalized "for you" and "similar to X" from follows and watches, and "people who follow X also follow Y" from our users. TMDB's similar/recommendation endpoints remain an option if TheTVDB's coarse genres limit quality (second API and license).
 
 ### M8 — Import from other trackers *(placeholder)*
 Import follows and watch history from TV Time and Trakt, mapped to TheTVDB ids. → [Feature spec](../features/import-from-trackers.md)

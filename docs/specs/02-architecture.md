@@ -26,8 +26,9 @@ iOS / Android / Vercel web ──REST+JWT──▶ Cloud Run service: api (cmd/s
                                             │  pgx ▶ Neon Postgres
                                             │  read-through cache ▶ TheTVDB v4
 Cloud Scheduler ─▶ Cloud Run Jobs:
-   tvdb-sync   (hourly)   /updates diff ▶ upsert ▶ notifications (renewed / ended / new episodes)
-   air-alerts  (15 min)   episodes airing soon for followed shows ▶ FCM
+   tvdb-sync   (hourly)   /updates ▶ refresh stored series (M2); diff ▶ notifications (M4)
+   air-alerts  (15 min)   episodes airing soon for followed shows ▶ FCM (M4)
+   discovery   (weekly)   /series/filter per market and genre ▶ ranked lists (M7)
 ```
 
 ## Tech stack
@@ -85,6 +86,7 @@ Decisions recorded up front:
 
 - **TheTVDB licensing:** we have a licensed project key, so the backend may cache TheTVDB data and serve it to all users. Clients never call TheTVDB directly.
 - **TheTVDB `/updates`:** `since` must be less than 90 days ago. If the sync cursor is older, re-fetch every tracked series instead.
+- **Partial copy, not a mirror:** we store only series someone opened or followed (fetched on first request), plus M7's own candidate lists. The API never calls TheTVDB for a stored series; `tvdb-sync` keeps them fresh.
 - **TheTVDB status:** the only values are Continuing, Ended and Upcoming. "Renewed" is derived from a new season record or Ended→Continuing. "Cancelled" can't be told apart from "Ended".
 - **Air times:** TheTVDB air times are local to the series' country (its capital or most populous city); for streaming services they are the official release time. Converting to UTC needs a country→timezone map.
 - **Auth tokens:**
