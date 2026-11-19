@@ -41,5 +41,8 @@ Similar shows and "for you" picks, scored by genre overlap, shared network, and 
 ### M8 — Import from other trackers *(placeholder)*
 Import follows and watch history from TV Time and Trakt, mapped to TheTVDB ids. → [Feature spec](../features/import-from-trackers.md)
 
+### Web — email link pages *(later, repo `StreamNext/Web` is empty)*
+`/verify-email` and `/reset-password` pages that the auth emails link to (format fixed in [auth.md](../features/auth.md)). Next.js on Vercel; decide CORS vs server-side calls when it starts.
+
 ### Later
 Movies, the Vercel website, the iOS app, the Android app.

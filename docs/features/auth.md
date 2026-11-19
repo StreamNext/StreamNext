@@ -27,12 +27,14 @@ Local-only: everything here is built and tested without GCP, Resend, Apple or Go
 - Email is trimmed and compared case-insensitively (`citext`). Display name 1–40 characters, defaulting to the provider name or the part of the email before the `@`. Timezone is a valid IANA name, default `UTC`.
 - Login failure is always the same 401 `unauthenticated` "invalid credentials", whether the email is unknown or the password is wrong. For an unknown email the server still performs a dummy hash, so response time doesn't reveal which accounts exist.
 - Register with an email already in use returns **409 conflict**. This lets a caller learn that an email is registered; accepted for a better sign-up experience, limited by rate limiting.
-- Users who signed up with Apple/Google have no password (`password_hash` null) and an already verified email.
+- Users who signed up with Apple/Google have no password (`password_hash` null) and an already verified email. `change-password` for such an account is 400 `invalid_argument` "account has no password"; setting a first password belongs with slice 3.
 
 **Email verification and reset**
 - Register sends a verification email. **Unverified users can log in and track shows**; features that publish content (posting in threads, M5) will require a verified email.
 - `email_token`: 32 random bytes, stored hashed, single-use. Verification tokens last 24h, reset tokens 1h. A newly issued token of the same purpose invalidates older unused ones.
 - `forgot-password` and `resend-verification` always return 202 with no body difference, whether or not the email exists.
+- **Links:** the email carries `{APP_BASE_URL}/verify-email?token=<token>` or `{APP_BASE_URL}/reset-password?token=<token>`, with the token URL-safe base64. This format is the contract the Web repo implements later (see Clients). Plain-text emails only for now.
+- **Cooldown:** at most one email per address per purpose per 60 seconds, decided from `email_token.created_at`. A request inside the cooldown still returns 202 and sends nothing, so one address can't be mail-bombed even by many IPs.
 - Emails are sent through the `Mailer` interface. `MAIL_PROVIDER=log` (local default) only logs and the server refuses to start with it when `ENV=prod`; `resend` posts to the Resend HTTP API using the standard library.
 
 **Social sign-in** (`POST /v1/auth/apple`, `/v1/auth/google`)
@@ -45,10 +47,11 @@ Local-only: everything here is built and tested without GCP, Resend, Apple or Go
 - Rate limiting: a global per-IP limit (10 requests/s, burst 30) and a stricter limit on register, login, refresh, forgot-password, resend-verification and the social endpoints. Excess requests get 429 `rate_limited` with `Retry-After`. *shortcut: in-memory per instance, so with several Cloud Run instances the real limit is higher; move to Postgres/Redis if abused.*
 - `DELETE /v1/me` hard-deletes the user, with dependent rows removed by `ON DELETE CASCADE`. Password users must send their password; social-only users just need a valid access token.
 
-**Config added** (all via sops/env, none required in `Config` until used): `JWT_SECRET`, `APPLE_CLIENT_ID`, `GOOGLE_CLIENT_IDS` (comma-separated: iOS, Android, web), `MAIL_PROVIDER`, `RESEND_API_KEY`, `MAIL_FROM`, `ENV`.
+**Config added** (all via sops/env, none required in `Config` until used): `JWT_SECRET` (slice 1), `APP_BASE_URL` (default `http://localhost:3000`), `MAIL_PROVIDER`, `RESEND_API_KEY`, `MAIL_FROM`, `ENV` (slice 2); `APPLE_CLIENT_ID`, `GOOGLE_CLIENT_IDS` (comma-separated: iOS, Android, web) (slice 3).
 
 ## Clients
 - Backend + Proto only for now. iOS and Android follow later (Keychain storage with FaceID, deviceId generation, silent refresh on 401).
+- **Web (later, `StreamNext/Web`, currently empty):** two pages the email links point at. `/verify-email?token=` calls `POST /v1/auth/verify-email` and shows the result; `/reset-password?token=` is a new-password form calling `POST /v1/auth/reset-password`. Until they exist the links resolve to nothing, which is acceptable pre-launch (the log mailer prints the token). Open question for that milestone: call the API from Next.js route handlers (no CORS needed) or from the browser (API needs CORS for the Vercel origin).
 
 ## API endpoints
 Public (no bearer token):
@@ -103,6 +106,8 @@ Implemented and committed as three reviewable slices, each with its own version 
 4. In-memory rate limiting per instance (default) vs. a Postgres-backed limiter now.
 5. Social-only accounts can delete with just a valid access token (default) vs. requiring a fresh provider sign-in.
 6. Three slices (default) vs. one big change.
+7. Email token delivery: a link to the Web repo's pages (chosen 2026-11-19) vs. a short code typed in the app. The Web pages are built later, in their own milestone.
+8. 60-second per-address email cooldown and plain-text emails (proposed with slice 2).
 
 ## Implementation notes
 **Slice 1 (Backend 0.2.0 / Proto 0.2.0)** — register, login, refresh, logout, `GET`/`PATCH /v1/me`, bearer middleware, rate limiting.
@@ -121,3 +126,4 @@ Implemented and committed as three reviewable slices, each with its own version 
 - 2026-11-19: Initial spec (@mauro)
 - 2026-11-19: Open decisions 1–6 approved as recommended; tables created per slice
 - 2026-11-19: Slice 1 implemented (Backend 0.2.0, Proto 0.2.0)
+- 2026-11-19: Slice 2 decisions: links to Web pages (built later), 60s per-address cooldown, social-only change-password rejected
