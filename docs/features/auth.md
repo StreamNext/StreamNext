@@ -1,7 +1,7 @@
 # Feature: Auth
 
 ## Status
-planned
+in-progress (slice 1 of 3 implemented)
 
 ## GitHub issue
 <!-- Optional -->
@@ -92,7 +92,7 @@ Creates `users`, `oauth_account`, `refresh_token`, `email_token`, `device` as sk
 
 ## Slices
 Implemented and committed as three reviewable slices, each with its own version bump and Bruno additions:
-1. **0.2.0 core:** contract + migration, argon2id, JWT, refresh rotation, register/login/refresh/logout, bearer middleware, `GET`/`PATCH /v1/me`, rate limiting.
+1. **0.2.0 core (implemented 2026-11-19):** contract + migration, argon2id, JWT, refresh rotation, register/login/refresh/logout, bearer middleware, `GET`/`PATCH /v1/me`, rate limiting.
 2. **0.3.0 email flows:** `Mailer` (log + Resend), email tokens, verify, resend, forgot/reset, change-password, delete.
 3. **0.4.0 social + devices:** `TokenVerifier` (Apple, Google), `/auth/apple`, `/auth/google`, device endpoints.
 
@@ -105,8 +105,19 @@ Implemented and committed as three reviewable slices, each with its own version 
 6. Three slices (default) vs. one big change.
 
 ## Implementation notes
-<!-- Filled in after implementation (Phase 5) -->
+**Slice 1 (Backend 0.2.0 / Proto 0.2.0)** — register, login, refresh, logout, `GET`/`PATCH /v1/me`, bearer middleware, rate limiting.
+
+- Layers: `rest` → `service` (interfaces in `service/repositories.go`) → `repository` (sqlc + pgx); `auth` holds the crypto. Migration `00002_auth.sql`; sqlc output is committed.
+- Service tests use in-memory fakes that behave like the real repositories (one live token per device, atomic rotate) rather than mocks, plus a simulated race. Postgres-backed tests cover case-insensitive email, the one-live-token index, cascade delete and 8 concurrent rotations (exactly one winner). I mutation-tested the reuse, device-binding, dummy-hash, grace and expiry rules: all five deliberate bugs were caught.
+- Bearer protection is read from the contract: the OpenAPI spec is embedded in the generated code and `internal/rest/authmw.go` marks the routes whose `security` is non-empty. A test pins the exact set (`GET`/`PATCH /v1/me`). The generated std-http wrapper does not mark secured operations, so this replaced the original plan.
+- Rate limits (constants in `rest.DefaultLimits`): global 10 req/s burst 30 per IP; `/v1/auth/*` additionally 0.5 req/s burst 20. In memory, per instance, keyed on the connection address (see the shortcut comment).
+- New config: `JWT_SECRET` (required, at least 32 bytes) and `REFRESH_GRACE_SECONDS` (default 10). Compose sets the grace to 0 and uses a test-only secret, so Bruno can assert reuse detection without a sleep.
+- Bruno: 17 auth requests (register, duplicate, weak password, wrong password, unknown email, login, `/me`, 401s, patch, rotation, reuse, logout, refresh after logout). Total suite: 20 requests, 51 assertions.
+- Verified: `make test` (97.5% of hand-written code, gate 90%), `make bruno`, and `make migrate`/`make run` against the dev database on the Windows host (migration applied, `/v1/me` rejects missing and bad tokens; no test users created there).
+- Behaviours worth knowing: presenting a token that was revoked by **logout** also counts as reuse and revokes every session of that user (as specified); two simultaneous logins on one device can make one fail with a 500 (unique-index violation, rare, not handled); each register/login attempt costs about 19 MiB of memory for argon2id, so the rate limiter is also what protects the server from memory exhaustion (per instance only).
+- Not covered by this slice: email verification, password reset, change-password, account deletion (slice 2); Apple/Google and devices (slice 3).
 
 ## Change log
 - 2026-11-19: Initial spec (@mauro)
 - 2026-11-19: Open decisions 1–6 approved as recommended; tables created per slice
+- 2026-11-19: Slice 1 implemented (Backend 0.2.0, Proto 0.2.0)
