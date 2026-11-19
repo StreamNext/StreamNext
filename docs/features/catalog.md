@@ -23,13 +23,13 @@ Everything after this builds on the catalog: tracking (M3), sync and notificatio
 - **Fallback:** names and overviews are returned in the user's language, falling back to English, then to the show's original language. The original-language name is always returned as well.
 - **Fetching:** TheTVDB language codes are `eng` and `spa`.
   - Series translations come with the extended record (`meta=translations`).
-  - Episode translations need one paginated pass per language (`/series/{id}/episodes/default/{lang}`), so a full refresh makes three passes: original, English, Spanish.
+  - Episode translations need one paginated pass per language (`/series/{id}/episodes/default/{lang}`, which returns the episodes with their names in that language, empty where there is no translation), so a full fetch makes three passes: original, English, Spanish. A series costs about 5 requests.
   - Search results already include translations.
 - **Genres:** TheTVDB only names genres in English, so Spanish genre names come from a small fixed map in our code, keyed by TheTVDB genre id, with English as the fallback for any genre missing from it.
 - **Enums:** status values are enums, and clients translate them.
 
 **Search** (`GET /v1/search/series`)
-- **Proxying:** forwards to TheTVDB `/search?type=series`, 20 results per page.
+- **Proxying:** forwards to TheTVDB `/search?type=series`, 20 results per page (`limit`/`offset`; the response says how many results exist, which gives `hasMore`).
 - **Input:** `query` is trimmed and must be 2–100 characters; `page` is ≥ 1, at most 25 (TheTVDB caps search at 5,000 results).
 - **Results:** summaries only (id, name, year, network, status, poster thumbnail, short overview). They are **not stored**: a series is stored when its detail is first opened.
 - **Caching:** identical searches (same query, page and language) are cached for 10 minutes. *shortcut: in memory, per instance, bounded size; move to a shared cache if search traffic grows.*
@@ -48,17 +48,18 @@ Everything after this builds on the catalog: tracking (M3), sync and notificatio
   - Average runtime, genres, and seasons in the default order (season 0 is specials).
 - **What is stored per episode:** season number, number, absolute number, name and overview (original, plus English and Spanish translations where they exist), aired date (null while unannounced), runtime, image, finale type.
 - **Air times:** stored as TheTVDB gives them, local to the series' country. Turning them into UTC instants is M4's job.
-- **Vanished episodes:** a refresh replaces the episode list, so episodes TheTVDB no longer lists are removed. *M3 must decide how this interacts with watch history before anything references episodes.*
+- **Writing a refresh:** episodes are **upserted by their TheTVDB id**, and only episodes TheTVDB no longer lists are deleted. Ids never change, so anything that later references an episode (watch history, threads) survives a refresh. Translations, genres and seasons are rewritten.
 - **Duplicate fetches:** two simultaneous first requests for the same series both fetch it; the second write is identical, so this is allowed. *shortcut: no request coalescing; add it if TheTVDB usage becomes a problem.*
 - **Episodes endpoint:** `?season=N` limits it to one season. Without it, all episodes come back in season and episode order.
 
 **Sync job** (`cmd/jobs/tvdb-sync`): keeps every stored series fresh, so the API never has to.
-- **What it reads:** TheTVDB's `/updates?since=<cursor>` for the record types we store: `series`, `seasons`, `episodes`, `translatedseries`, `translatedepisodes`. It follows every page.
-- **What it refreshes:** only series **we have stored**; everything else in the feed is ignored. Each affected series is re-fetched in full through the same code as a first fetch and replaced in one transaction, so episode additions, edits and deletions all land.
-- **Deletions:** a series TheTVDB deleted is removed from our copy. If it was merged into another (`mergeToId`), the target is fetched instead. *M3 must revisit this once watch history references episodes.*
-- **Cursor:** stored in `sync_state` and only advanced after a fully successful run (to that run's start time, minus a small safety margin), so a failed run is simply repeated. TheTVDB refuses a `since` older than 90 days, so a cursor that old (or none) means re-fetching every stored series once and starting fresh.
+- **What it reads:** TheTVDB's `/updates?since=<cursor>&type=series`, following every page (pages are numbered from 0, 500 records each). *Verified against the real API on 2026-11-19:* an update to an episode or season is always accompanied by an update to its series (40 of 40 sampled episode updates, 15 of 15 newly created episodes), and the series' `lastUpdated` moves with it, so the `series` feed alone covers new, changed and removed episodes. The other feeds can't be used: `episodes` and `seasons` records don't name their series, and `translatedseries` / `translatedepisodes` carry translation-row ids that match no series or episode.
+- **What it refreshes:** only series **we have stored**; the rest of the feed is ignored. Each affected series is re-fetched in full through the same code as a first fetch and saved in one transaction.
+- **Safety net:** every run also refreshes up to 50 stored series whose last sync is more than 30 days old, to catch anything the feed missed (translation-only changes, for instance).
+- **Deletions:** a `delete` record for a stored series removes it (children cascade); a stored series TheTVDB answers 404 for is removed too. *M3 must revisit this once watch history references episodes.*
+- **Cursor:** kept in `sync_state` and advanced only after a run with **no failures**, to that run's start time (the next run reads from 5 minutes earlier), so a failed run is repeated. TheTVDB refuses a `since` older than 3 months (it answers 400), so a cursor older than 80 days, or none, means every stored series is re-fetched once.
 - **Running it:** locally with `make tvdb-sync ENV=dev`; hourly by Cloud Scheduler once deployment exists (on hold).
-- **Concurrent writes:** the job and an API miss can write the same series at once. Both write a full, consistent copy in one transaction, so the last one wins harmlessly.
+- **Concurrent writes:** the job and an API miss can save the same series at once. Both write a full, consistent copy in one transaction, so the last one wins harmlessly.
 
 **Access**
 - **Sign-in required:** every catalog endpoint requires a bearer token, so our licensed key can't be used as an open proxy. The global rate limit applies.
@@ -93,15 +94,15 @@ Migration `00005_catalog`. Catalog rows use TheTVDB's ids (`bigint`) as primary 
 - Children cascade from `series`.
 
 ## Testing
-- **TheTVDB client:** `httptest` with fixtures **recorded once from the real API** with our key. They are trimmed to the fields we use, and descriptive text (overviews) is replaced by placeholders, because the repo is public and we must not republish TheTVDB's content.
+- **TheTVDB client:** `httptest` with fixtures **recorded once from the real API** with our key (`cmd/tvdbrecord`). They are trimmed to the fields we use, and descriptive text (overviews) is replaced by placeholders, because the repo is public and we must not republish TheTVDB's content.
   - Covers login, token renewal on 401, pagination, translations, 404 vs 5xx, malformed bodies, timeouts.
-- **Live check (opt-in):** `make tvdb-live` (a build-tagged test) against the real API with the key from sops, to catch API drift. Not run in CI unless a secret is added later.
+- **Live check (opt-in):** `make tvdb-live` runs a build-tagged test against the real API with the key from sops, to catch API drift. Not run in CI unless a secret is added later.
 - **Service:** in-memory fakes. Covers fetch-on-miss, stored series served with TheTVDB down, 404 vs 503, status mapping, and the language fallback (Spanish, then English, then original), including the genre name map.
 - **Repository:** Postgres tests. Covers replace-in-one-transaction, vanished episodes removed, genres, cascade, the sync cursor.
-- **Sync job:** fakes plus an `httptest` TheTVDB. Covers only stored series refreshed, paging, the cursor advancing only after success, the 90-day fallback, deletion and merge, and a rerun after a failure doing no harm.
+- **Sync job:** fakes. Covers only stored series refreshed, the cursor advancing only after a clean run, the 80-day fallback, deletion, the 30-day safety net, and a rerun after a failure doing no harm.
 - **REST:** handlers, sign-in required (contract-driven), `int64` path parameter binding, query validation.
 - **Bruno:** the CI compose stack runs a small TheTVDB stub (`cmd/tvdbstub`, serving the same fixtures), so search, detail and episodes run end to end without the real key, in both languages (switching the profile to `es` changes the names returned).
-- **Fixtures:** recorded with the standard Go golden-file pattern: `go test -tags tvdblive ./internal/tvdb -update` calls the real API, trims, replaces text with per-language placeholders, and writes `testdata/`. This is also the live drift check.
+- **Fixtures:** `make tvdb-record` (needs the key) calls the real API for a fixed set of series, trims each response to the fields we read, replaces overviews with placeholders, and writes `internal/tvdb/stub/testdata/`. The same fixtures drive the unit tests and the CI stub. Real series names are kept (short factual titles). The updates feed is time-dependent, so its tests use hand-built responses.
 
 ## Config
 `TVDB_API_KEY` (sops / Secret Manager; unset means the catalog is disabled with 503), `TVDB_BASE_URL` (optional).
@@ -128,3 +129,4 @@ Migration `00005_catalog`. Catalog rows use TheTVDB's ids (`bigint`) as primary 
 - 2026-11-19: Initial spec (@mauro)
 - 2026-11-19: Decisions: English + Spanish per user, sign-in required, trimmed real fixtures
 - 2026-11-19: Option B: fetch on miss, `tvdb-sync` job brought forward from M4; discovery kept separate
+- 2026-11-19: Sync reads only the `series` updates feed (verified against the real API), plus a 30-day safety net; episodes are upserted by id
