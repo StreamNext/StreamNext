@@ -17,7 +17,7 @@ StreamNext is a TV show tracker. Users follow shows and mark the episodes they'v
 - No user image uploads in v1: memes are GIPHY GIFs only.
 
 ## Current status
-M0 (foundation) is implemented locally: `Backend` 0.1.0 serves `GET /v1/health` and `Proto` 0.1.0 holds the contract. Both are committed on `develop` but not pushed, and nothing is deployed. `iOS` and `Android` haven't been created. The backend is being built first (see the milestones in `01-requirements.md`).
+M0 (foundation) and M1 (auth) are implemented: `Backend` 0.4.0 and `Proto` 0.4.0 are on `develop` on GitHub with CI green, and nothing is deployed. `iOS` and `Android` haven't been created. The backend is being built first (see the milestones in `01-requirements.md`).
 
 ## Repos
 

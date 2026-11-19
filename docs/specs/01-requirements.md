@@ -6,6 +6,10 @@
 Go backend skeleton with `GET /v1/health`, sops secrets, goose migrations, 90% coverage gate and a Bruno suite; Proto contract with buf module. Implemented locally; CI and deploy are unverified.
 → [Feature spec](features/foundation.md)
 
+### M1 — Auth
+Email and password, Sign in with Apple, Google sign-in; 15-minute access JWTs with rotating, device-bound refresh tokens and theft detection; email verification, password reset, change-password, account deletion; push-token registration. Implemented in three slices (Backend 0.2.0 to 0.4.0). Not yet exercised with real Apple/Google tokens or a real mail provider.
+→ [Feature spec](features/auth.md)
+
 <!-- Each further entry, once a feature ships, should look like:
 
 ### Feature name
@@ -16,9 +20,6 @@ One or two sentences describing what's implemented and its key business rule.
 ## Planned
 
 Backend milestones, in build order. Each gets a `docs/features/*.md` spec via `/spec` right before it is implemented.
-
-### M1 — Auth *(slices 1 and 2 of 3 implemented: sessions, `/me`, email verification, password reset, change-password, delete account; slice 3 is Apple/Google and devices; see [auth.md](../features/auth.md))*
-Email and password (verification and reset through Resend), Sign in with Apple, and Google sign-in, where the server verifies the native SDK's ID token. Access JWTs last 15 minutes. Refresh tokens are opaque, bound to a device and rotated on every use; reusing a revoked one revokes every token the user has. FaceID is client-side, guarding the refresh token in the Keychain. Also covers FCM device-token registration and account deletion.
 
 ### M2 — Catalog
 Show search (TheTVDB proxy) and series detail with seasons and episodes, read through and cached in Postgres.

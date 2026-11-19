@@ -30,8 +30,6 @@ SyncState (TheTVDB /updates cursor)
 
 | Table | Milestone | Key columns / rules |
 |---|---|---|
-| `oauth_account` | M1 | `(provider, subject)` unique; `user_id` |
-| `device` | M1 | `(user_id, device_id)` unique; `fcm_token`; `platform` (ios / android) |
 | `series` | M2 | `id` = TheTVDB id (bigint); `name`; `slug`; `overview`; `image`; `status` (continuing / ended / upcoming); `first_aired`, `last_aired`, `next_aired`; `airs_time`; `country`; `network`; `average_runtime`; `score`; `synced_at` |
 | `genre`, `series_genre` | M2 | `genre.id` = TheTVDB id |
 | `season` | M2 | `id` = TheTVDB id; `series_id`; `number`; default season type only |
@@ -90,6 +88,34 @@ Single-use tokens in verification and password-reset emails.
 
 Index: `(user_id, purpose, created_at DESC)`.
 
+### `oauth_account` (uuid PK, migration 4)
+A Sign in with Apple / Google identity linked to a user.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid | PK |
+| `user_id` | uuid | FK → `users`, `ON DELETE CASCADE` |
+| `provider` | text | `apple` or `google` (CHECK) |
+| `subject` | text | the provider's stable id for the person |
+| `email` | text | null; what the provider reported when the identity was linked (informational) |
+| `created_at` | timestamptz | |
+
+Unique `(provider, subject)`: an identity belongs to exactly one user. Index: `user_id`.
+
+### `device` (uuid PK, migration 4)
+A user's device and its push (FCM) token.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid | PK |
+| `user_id` | uuid | FK → `users`, `ON DELETE CASCADE` |
+| `device_id` | uuid | client-generated; the same id as `refresh_token.device_id` |
+| `fcm_token` | text | **unique**: one token, one owner; registering it again moves it |
+| `platform` | text | `ios` or `android` (CHECK) |
+| `created_at`, `updated_at` | timestamptz | |
+
+Unique `(user_id, device_id)`. For M4: push only to devices that also have a live refresh token for that `(user_id, device_id)`.
+
 ## Key types
 
 ### ID types
@@ -112,3 +138,4 @@ Postgres `text` columns with `CHECK` constraints, mirrored as enums in the OpenA
 | 1 | `00001_extensions.sql` | `citext` extension (case-insensitive emails from M1) |
 | 2 | `00002_auth.sql` | `users`, `refresh_token` and their indexes |
 | 3 | `00003_email_token.sql` | `email_token` (verification and reset tokens) |
+| 4 | `00004_social_and_devices.sql` | `oauth_account`, `device` |

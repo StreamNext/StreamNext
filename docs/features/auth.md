@@ -1,7 +1,7 @@
 # Feature: Auth
 
 ## Status
-in-progress (slices 1 and 2 of 3 implemented)
+implemented
 
 ## GitHub issue
 <!-- Optional -->
@@ -38,9 +38,22 @@ Local-only: everything here is built and tested without GCP, Resend, Apple or Go
 - Emails are sent through the `Mailer` interface. `MAIL_PROVIDER=log` (local default) only logs and the server refuses to start with it when `ENV=prod`; `resend` posts to the Resend HTTP API using the standard library.
 
 **Social sign-in** (`POST /v1/auth/apple`, `/v1/auth/google`)
-- The client sends the provider ID token. The server verifies the signature against the provider's JWKS (cached 1h), `iss`, `aud` (configured client IDs), `exp`, and for Apple the nonce.
-- Provider identity is `(provider, subject)`. If it is unknown but the token carries an email the provider marks as verified, and a user with that email already exists, the identity is **linked** to that user. Otherwise a new user is created. An unverified provider email never links.
-- Apple's private-relay addresses are treated as ordinary emails.
+- The client sends the provider ID token. The server verifies the signature (RS256 only) against the provider's published keys (cached 1h, refetched once on an unknown key id, stale keys kept if the provider is briefly unreachable), `iss`, `aud` (Apple: `APPLE_CLIENT_ID`; Google: any of `GOOGLE_CLIENT_IDS`), `exp`, and for Apple the nonce: the client sends the raw nonce and the server compares its SHA-256 (hex) with the token's `nonce` claim.
+- A provider whose client id is not configured answers 503 `unavailable`; an invalid or expired token is 401 `unauthenticated`; the provider's key server being down is 503.
+- Provider identity is `(provider, subject)`. A known identity signs in its user, whatever the email says now. For an unknown identity:
+  - **No email in the token** → 401 (we cannot create an account without one).
+  - **Provider-verified email, and a user with that email exists** → the identity is **linked** to that user and their email is marked verified. *Pre-hijacking defense:* if that account's email was never verified, anyone could have registered it with a password they know, so linking first **clears its password and revokes all its sessions**. A verified account keeps its password.
+  - **Provider-verified email, no such user** → a new user is created with a verified email and no password.
+  - **Unverified provider email** never links: if it matches an existing user the answer is 409 `conflict`; otherwise the user is created unverified and gets the normal verification email.
+- New users: display name from the Google `name` claim, else the request's `displayName` (Apple shares the name only on the first authorization, via the client), else the part of the email before the `@`, cut to 40 characters. Timezone `UTC`. The session is device-bound with a 90-day refresh lifetime.
+- Two simultaneous first sign-ins of the same identity are handled by re-reading once after a uniqueness conflict. Apple's private-relay addresses are treated as ordinary emails.
+- An account that signed in only with a provider has no password. `forgot-password` **does** email them a reset link (the email proves ownership), which is how they set a first password; `change-password` stays 400 because it needs a current password.
+
+**Devices** (`PUT`/`DELETE /v1/devices/{deviceId}`)
+- `PUT` upserts the push (FCM) token for `(user, deviceId)`: `fcmToken` 1–4096 characters, `platform` `ios` or `android`; 204.
+- An FCM token belongs to exactly one device row. If another user registers the same token (someone else signed in on that device), it **moves** to them, so notifications for the previous user can no longer reach it.
+- `DELETE` is idempotent (204 whether or not the row exists). Rows vanish with their user.
+- *For M4:* pushes are sent only to devices that also have a live refresh token for that user and device, so logging out stops pushes without a cleanup step.
 
 **Access control**
 - Endpoints marked with `bearerAuth` in the contract require `Authorization: Bearer <access token>`; a missing, malformed or expired token is 401 `unauthenticated`. The middleware puts the user id in the request context.
@@ -62,8 +75,8 @@ Public (no bearer token):
 | `POST /v1/auth/login` `{email, password, deviceId, rememberMe?}` | returns the same session body | 401, 429 |
 | `POST /v1/auth/refresh` `{refreshToken, deviceId}` | rotate, returns the same session body | 401 (also on reuse), 429 |
 | `POST /v1/auth/logout` `{refreshToken}` | revoke that token; always 200, idempotent | — |
-| `POST /v1/auth/apple` `{identityToken, nonce, deviceId, displayName?}` | sign in / sign up | 401, 429 |
-| `POST /v1/auth/google` `{idToken, deviceId}` | sign in / sign up | 401, 429 |
+| `POST /v1/auth/apple` `{identityToken, nonce, deviceId, displayName?}` | sign in / sign up, returns a session | 401, 409, 429, 503 |
+| `POST /v1/auth/google` `{idToken, deviceId}` | sign in / sign up, returns a session | 401, 409, 429, 503 |
 | `POST /v1/auth/verify-email` `{token}` | mark email verified | 400 (invalid or expired token) |
 | `POST /v1/auth/resend-verification` `{email}` | always 202 | 429 |
 | `POST /v1/auth/forgot-password` `{email}` | always 202 | 429 |
@@ -77,8 +90,8 @@ Authenticated (`bearerAuth`):
 | `PATCH /v1/me` `{displayName?, timezone?}` | update profile |
 | `POST /v1/me/change-password` `{currentPassword, newPassword, deviceId, rememberMe?}` | revokes all sessions, returns a new session for that device; wrong current password is 403, an account without a password is 400 |
 | `DELETE /v1/me` `{password?}` | delete account: 204; accounts with a password must send it (wrong or missing is 403) |
-| `PUT /v1/devices/{deviceId}` `{fcmToken, platform}` | register or update the push token (upsert) |
-| `DELETE /v1/devices/{deviceId}` | remove it |
+| `PUT /v1/devices/{deviceId}` `{fcmToken, platform}` | register or update the push token (upsert), 204 |
+| `DELETE /v1/devices/{deviceId}` | remove it, 204 (idempotent) |
 
 New error kinds: `TooManyRequests` (429, `rate_limited`). Everything else reuses the existing kinds.
 
@@ -97,7 +110,7 @@ Creates `users`, `oauth_account`, `refresh_token`, `email_token`, `device` as sk
 Implemented and committed as three reviewable slices, each with its own version bump and Bruno additions:
 1. **0.2.0 core (implemented 2026-11-19):** contract + migration, argon2id, JWT, refresh rotation, register/login/refresh/logout, bearer middleware, `GET`/`PATCH /v1/me`, rate limiting.
 2. **0.3.0 email flows (implemented 2026-11-19):** `Mailer` (log + Resend), email tokens, verify, resend, forgot/reset, change-password, delete.
-3. **0.4.0 social + devices:** `TokenVerifier` (Apple, Google), `/auth/apple`, `/auth/google`, device endpoints.
+3. **0.4.0 social + devices (implemented 2026-11-19):** `TokenVerifier` (Apple, Google), `/auth/apple`, `/auth/google`, device endpoints.
 
 ## Decisions (all defaults approved 2026-11-19)
 1. Register with a used email: 409 (default) vs. always 202 and email the owner instead.
@@ -108,6 +121,9 @@ Implemented and committed as three reviewable slices, each with its own version 
 6. Three slices (default) vs. one big change.
 7. Email token delivery: a link to the Web repo's pages (chosen 2026-11-19) vs. a short code typed in the app. The Web pages are built later, in their own milestone.
 8. 60-second per-address email cooldown and plain-text emails (proposed with slice 2).
+9. Linking a provider to an unverified password account clears the password and revokes its sessions (pre-hijacking defense); provider-verified linking also verifies the email (approved with slice 3).
+10. `forgot-password` works for accounts without a password, so social-only users can set one (approved with slice 3).
+11. An FCM token moves to the latest user who registers it; M4 pushes only to devices with a live refresh token (approved with slice 3).
 
 ## Implementation notes
 **Slice 1 (Backend 0.2.0 / Proto 0.2.0)** — register, login, refresh, logout, `GET`/`PATCH /v1/me`, bearer middleware, rate limiting.
@@ -132,9 +148,29 @@ Implemented and committed as three reviewable slices, each with its own version 
 - Verified: `make test` 97.7% of hand-written code, `make bruno` 34 requests / 78 assertions, and the full journey against the dev database with the log mailer (register, verify twice, forgot, weak reset, reset, old/new login, delete wrong/right password, then the deleted account is gone). The test account removed itself.
 - Known limits: resetting a password consumes the token before the password is written, so a database failure between the two burns the link (the user asks again); sending inline means response time can hint that an address exists (shortcut comment in `verification.go`); the Web pages the links point to do not exist yet, so the links resolve to nothing until that milestone.
 
+**Slice 3 (Backend 0.4.0 / Proto 0.4.0)** — Apple and Google sign-in, device push tokens.
+
+- Layers: `internal/social` (key cache + token verification, standard library plus the existing JWT package), `service.SocialAuth` and `service.Devices`, repositories for `oauth_account` and `device`, migration `00004`. User creation now takes a `NewUser` struct.
+- Rules decided with the slice (see Business rules): pre-hijacking defense on linking, provider-verified linking also verifies the email, an unverified provider email never links, `forgot-password` for passwordless accounts, one owner per FCM token.
+- Verifier tests are adversarial and use locally generated RSA keys and a fake key server: forged signature, `alg=none`, HS256 with the public key as secret, RS512, wrong issuer, wrong audience, expired, no expiry, unknown key id, key rotation, rate-limited refetch, provider outage (with and without cached keys), unusable key documents. I mutation-tested the verifier (algorithm list, issuer, audience, nonce comparison, nonce-required, expiry-required, subject, outage classification, string booleans) and the takeover logic (clearing the password, revoking sessions, unverified linking, verified accounts keeping their password, verifying the email, session lifetime, race retry): every deliberate bug was caught. Three mutations first failed to compile and one survived, which exposed that "the app must supply a nonce" was untested; it now is.
+- Postgres tests cover single ownership of an identity, token handover between users and between one user's devices, 10 rounds of two users registering the same token at once (the loser retries, up to 3 attempts), and cascades.
+- This is the first route with a path parameter, so the generated wrapper's binding-error path is now exercised (a malformed `deviceId` is a 400 through our error handler), and `securedRoutes` is checked against `{deviceId}` route patterns.
+- Config: a provider is enabled only when its client id is set; otherwise its endpoint answers 503. The strict rate-limit burst is now 40.
+- Verified: `make test` 98.3% of hand-written code, `make bruno` 45 requests / 97 assertions, and against the dev database: migration applied, both providers answer 503 (no client ids in the dev secrets), and two users handed one push token between them. The test accounts deleted themselves.
+
+**What has NOT been verified.** No real Apple or Google token has ever gone through this code: that needs your Apple bundle id / Google client ids and a real device sign-in. The Apple nonce check follows Apple's documented flow (the client sends SHA-256 of a raw nonce to Apple; the server compares the SHA-256 hex of the raw nonce with the token's `nonce` claim). If a real Apple sign-in fails on the nonce, that is the first place to look. Apple's and Google's key endpoints have only been tested against a fake server.
+
+**Known limits and follow-ups**
+- Deleting an account does not revoke the Apple token. App Store review requires that for Sign in with Apple users; it needs an Apple developer key, so it is a follow-up before submission.
+- There is no way to unlink a provider or list linked providers yet.
+- A social-only user sets a first password through `forgot-password`; `change-password` still needs a current password.
+- M4 must send pushes only to devices that also have a live refresh token for that user and device (the stale-token rule in Business rules), and must read tokens from the `device` table.
+- If the providers' key endpoints are down and nothing is cached, sign-in answers 503 until they recover; each attempt tries to refetch (bounded by the global rate limit).
+
 ## Change log
 - 2026-11-19: Initial spec (@mauro)
 - 2026-11-19: Open decisions 1–6 approved as recommended; tables created per slice
 - 2026-11-19: Slice 1 implemented (Backend 0.2.0, Proto 0.2.0)
 - 2026-11-19: Slice 2 decisions: links to Web pages (built later), 60s per-address cooldown, social-only change-password rejected
 - 2026-11-19: Slice 2 implemented (Backend 0.3.0, Proto 0.3.0); reuse detection narrowed to rotated tokens
+- 2026-11-19: Slice 3 implemented (Backend 0.4.0, Proto 0.4.0); feature complete, not yet exercised with real Apple/Google tokens
