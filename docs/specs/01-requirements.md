@@ -17,7 +17,7 @@ One or two sentences describing what's implemented and its key business rule.
 
 Backend milestones, in build order. Each gets a `docs/features/*.md` spec via `/spec` right before it is implemented.
 
-### M1 — Auth *(slice 1 of 3 implemented: register, login, refresh, logout, `/me`; see [auth.md](../features/auth.md))*
+### M1 — Auth *(slices 1 and 2 of 3 implemented: sessions, `/me`, email verification, password reset, change-password, delete account; slice 3 is Apple/Google and devices; see [auth.md](../features/auth.md))*
 Email and password (verification and reset through Resend), Sign in with Apple, and Google sign-in, where the server verifies the native SDK's ID token. Access JWTs last 15 minutes. Refresh tokens are opaque, bound to a device and rotated on every use; reusing a revoked one revokes every token the user has. FaceID is client-side, guarding the refresh token in the Keychain. Also covers FCM device-token registration and account deletion.
 
 ### M2 — Catalog

@@ -1,7 +1,7 @@
 # Feature: Auth
 
 ## Status
-in-progress (slice 1 of 3 implemented)
+in-progress (slices 1 and 2 of 3 implemented)
 
 ## GitHub issue
 <!-- Optional -->
@@ -18,7 +18,7 @@ Local-only: everything here is built and tested without GCP, Resend, Apple or Go
 - Bound to a `deviceId` (a UUID the client generates). A token presented with a different `deviceId` gets the same 401 as an unknown token.
 - Login, register and social sign-in revoke any active refresh token for the same user and device, so a device has one live token.
 - **Rotation:** every refresh revokes the presented token and issues a new pair; the old row records `replaced_by`.
-- **Reuse detection:** presenting an already-revoked token revokes *every* refresh token of that user (assume theft), returns 401.
+- **Reuse detection:** presenting a token that was already **rotated** (it has a successor) revokes *every* refresh token of that user (assume a copy leaked) and returns 401. A token revoked any other way (logout, a newer login on the same device, a password change or reset, or an earlier reuse revocation) is just a 401 with no side effects. *Refined during slice 2: the original wording said any revoked token, which would have let a stale device undo a fresh login after a password reset.*
 - **Grace window (10s):** if the presented token was rotated under 10 seconds ago and its successor has never been used, the server revokes the successor and issues a fresh pair, so a client that lost the response can retry. Otherwise it is reuse. *(Not in WellSpent: its docs list this as a gap.)*
 - Changing or resetting the password, and deleting the account, revoke all refresh tokens.
 
@@ -75,8 +75,8 @@ Authenticated (`bearerAuth`):
 |---|---|
 | `GET /v1/me` | profile: id, email, emailVerified, displayName, timezone |
 | `PATCH /v1/me` `{displayName?, timezone?}` | update profile |
-| `POST /v1/me/change-password` `{currentPassword, newPassword}` | revokes all sessions, returns a new session for this device |
-| `DELETE /v1/me` `{password?}` | delete account |
+| `POST /v1/me/change-password` `{currentPassword, newPassword, deviceId, rememberMe?}` | revokes all sessions, returns a new session for that device; wrong current password is 403, an account without a password is 400 |
+| `DELETE /v1/me` `{password?}` | delete account: 204; accounts with a password must send it (wrong or missing is 403) |
 | `PUT /v1/devices/{deviceId}` `{fcmToken, platform}` | register or update the push token (upsert) |
 | `DELETE /v1/devices/{deviceId}` | remove it |
 
@@ -96,7 +96,7 @@ Creates `users`, `oauth_account`, `refresh_token`, `email_token`, `device` as sk
 ## Slices
 Implemented and committed as three reviewable slices, each with its own version bump and Bruno additions:
 1. **0.2.0 core (implemented 2026-11-19):** contract + migration, argon2id, JWT, refresh rotation, register/login/refresh/logout, bearer middleware, `GET`/`PATCH /v1/me`, rate limiting.
-2. **0.3.0 email flows:** `Mailer` (log + Resend), email tokens, verify, resend, forgot/reset, change-password, delete.
+2. **0.3.0 email flows (implemented 2026-11-19):** `Mailer` (log + Resend), email tokens, verify, resend, forgot/reset, change-password, delete.
 3. **0.4.0 social + devices:** `TokenVerifier` (Apple, Google), `/auth/apple`, `/auth/google`, device endpoints.
 
 ## Decisions (all defaults approved 2026-11-19)
@@ -122,8 +122,19 @@ Implemented and committed as three reviewable slices, each with its own version 
 - Behaviours worth knowing: presenting a token that was revoked by **logout** also counts as reuse and revokes every session of that user (as specified); two simultaneous logins on one device can make one fail with a 500 (unique-index violation, rare, not handled); each register/login attempt costs about 19 MiB of memory for argon2id, so the rate limiter is also what protects the server from memory exhaustion (per instance only).
 - Not covered by this slice: email verification, password reset, change-password, account deletion (slice 2); Apple/Google and devices (slice 3).
 
+**Slice 2 (Backend 0.3.0 / Proto 0.3.0)** — email verification, password reset, change-password, delete account.
+
+- Layers: `service` gets `Verification`, `PasswordReset` and `Account` (one small file each) over a shared `emailTokens` helper; `internal/mail` composes the emails and delivers through a transport; migration `00003_email_token`. Register calls `Verification.Send` through an optional interface, and a mail failure only logs.
+- Clarifications decided while building: a wrong current password is **403** (a 401 would make a client try to refresh a perfectly good access token); `change-password` needs a `deviceId` because it returns a new session; `DELETE /v1/me` answers 204 and its body is optional; an account without a password gets no reset email (slice 3 decides how a social-only user gets a first password); email is plain text and sent inline.
+- Rate limits: the strict limiter now also covers `POST /v1/me/change-password` and `DELETE /v1/me`, since a stolen access token could otherwise guess the current password. Defaults are now global 10 req/s burst 60 and strict 0.5 req/s burst 30 (the burst grew so the Bruno suite fits).
+- **Behaviour change found by a test:** with bulk revocation (password reset or change), a stale device presenting its old token triggered reuse detection and signed the user out of the session they had just created. Reuse detection now applies only to rotated tokens (see Business rules). Mutation tests cover it.
+- Tests: service tests with fakes mirroring the real token rules; Postgres tests for single use, expiry, purpose, supersession, rollback and 8 racing consumers; Resend tested against a fake HTTP server (the real API has never been called: it needs a key and a verified domain). I mutation-tested the cooldown, single-use, weak-password-first, session revocation, password check on delete and no-enumeration rules.
+- Verified: `make test` 97.7% of hand-written code, `make bruno` 34 requests / 78 assertions, and the full journey against the dev database with the log mailer (register, verify twice, forgot, weak reset, reset, old/new login, delete wrong/right password, then the deleted account is gone). The test account removed itself.
+- Known limits: resetting a password consumes the token before the password is written, so a database failure between the two burns the link (the user asks again); sending inline means response time can hint that an address exists (shortcut comment in `verification.go`); the Web pages the links point to do not exist yet, so the links resolve to nothing until that milestone.
+
 ## Change log
 - 2026-11-19: Initial spec (@mauro)
 - 2026-11-19: Open decisions 1–6 approved as recommended; tables created per slice
 - 2026-11-19: Slice 1 implemented (Backend 0.2.0, Proto 0.2.0)
 - 2026-11-19: Slice 2 decisions: links to Web pages (built later), 60s per-address cooldown, social-only change-password rejected
+- 2026-11-19: Slice 2 implemented (Backend 0.3.0, Proto 0.3.0); reuse detection narrowed to rotated tokens

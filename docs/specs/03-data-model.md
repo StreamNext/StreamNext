@@ -31,7 +31,6 @@ SyncState (TheTVDB /updates cursor)
 | Table | Milestone | Key columns / rules |
 |---|---|---|
 | `oauth_account` | M1 | `(provider, subject)` unique; `user_id` |
-| `email_token` | M1 | `token_hash`; `user_id`; `purpose` (verify / reset); `expires_at`; `used_at` |
 | `device` | M1 | `(user_id, device_id)` unique; `fcm_token`; `platform` (ios / android) |
 | `series` | M2 | `id` = TheTVDB id (bigint); `name`; `slug`; `overview`; `image`; `status` (continuing / ended / upcoming); `first_aired`, `last_aired`, `next_aired`; `airs_time`; `country`; `network`; `average_runtime`; `score`; `synced_at` |
 | `genre`, `series_genre` | M2 | `genre.id` = TheTVDB id |
@@ -76,6 +75,21 @@ SyncState (TheTVDB /updates cursor)
 
 Indexes: partial unique `(user_id, device_id) WHERE revoked_at IS NULL` (one live token per device), `user_id`.
 
+### `email_token` (uuid PK, migration 3)
+Single-use tokens in verification and password-reset emails.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid | PK |
+| `user_id` | uuid | FK → `users`, `ON DELETE CASCADE` |
+| `purpose` | text | `verify` or `reset` (CHECK); a token only works for its own purpose |
+| `token_hash` | text | unique; SHA-256 hex (the token only ever exists in the email) |
+| `expires_at` | timestamptz | 24h for `verify`, 1h for `reset` |
+| `created_at` | timestamptz | also drives the 60-second per-address email cooldown |
+| `consumed_at` | timestamptz | set when used, or when a newer token of the same purpose supersedes it |
+
+Index: `(user_id, purpose, created_at DESC)`.
+
 ## Key types
 
 ### ID types
@@ -97,3 +111,4 @@ Postgres `text` columns with `CHECK` constraints, mirrored as enums in the OpenA
 |---|---|---|
 | 1 | `00001_extensions.sql` | `citext` extension (case-insensitive emails from M1) |
 | 2 | `00002_auth.sql` | `users`, `refresh_token` and their indexes |
+| 3 | `00003_email_token.sql` | `email_token` (verification and reset tokens) |
