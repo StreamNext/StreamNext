@@ -1,7 +1,7 @@
 # Feature: Catalog
 
 ## Status
-planned
+implemented
 
 ## GitHub issue
 <!-- Optional -->
@@ -123,7 +123,21 @@ Migration `00005_catalog`. Catalog rows use TheTVDB's ids (`bigint`) as primary 
 7. **Discovery is not part of the catalog** (chosen 2026-11-19): M7 gets its own job, logic and tables. The catalog stores only series someone opened or followed.
 
 ## Implementation notes
-<!-- Filled in after implementation (Phase 5) -->
+**M2 (Backend 0.5.0 / Proto 0.5.0)**
+
+- Layers: `internal/tvdb` (the client, `stub/` fixtures), `service.Catalog` and `service.CatalogSync`, `repository.Catalog` and `SyncState`, REST handlers, `cmd/jobs/tvdb-sync`, `cmd/tvdbrecord`, `cmd/tvdbstub`. Migration `00005_catalog`.
+- **Real-API findings that changed the design** (all in the spec above): page numbers start at 0 with 500 per page; `updates` records carry only an id and a method, and only the `series` feed maps to a series, which the real API confirmed also reports episode and season changes; translation feeds carry translation-row ids; `airsDays` is an object of booleans; the extended record mixes several season orders and the series' aliases (flagged `isAlias`) into its name translations. The alias case was a real bug found while recording fixtures: the English name of one show would have come out as a Czech alias. It now has independent tests for ignoring aliases and for first-translation-wins.
+- Fixtures: two real series recorded with `make tvdb-record` (an English-original show and a Spanish-original one), trimmed, overviews replaced with placeholders, checked for leaked prose and secrets. The same files drive the client tests and the CI stub, so Bruno runs search, detail and episodes in both languages with no key.
+- Tests: client (99%), stub (100%), service (99%), Postgres repository including a table that references episodes surviving a refresh, concurrent saves, a 3,000-episode series and rollback on a failed save, REST (contract-driven sign-in, path and query parameter errors). Mutation-tested: the sync cursor, the stored-series-only rule, the safety net, deletion, the 80-day fallback, never-refresh-in-the-API, search cache, language fallback, Spanish genre names, zero-based paging, the default season order, alias handling, first-translation-wins, token renewal and the single 401 retry. Several survivors exposed weak tests (genres spelled the same in both languages; two defences hiding each other on the recorded data) and were fixed.
+- Verified: `make test` 97.9%, `make bruno` 62 requests / 151 assertions, and against the real TheTVDB with your key: search 0.3 s (6 ms cached), first open 0.7 s then 27 ms from our database, The Simpsons (890 episodes over two pages, 39 seasons) in 1.8 s with every episode listed, Spanish names and genres, 404 for an unknown id, and `tvdb-sync` run twice (the first a full refresh of the 3 stored series and cursor set, the second reading only the feed).
+
+**Known limits and follow-ups**
+- **Attribution:** TheTVDB's licence terms may require showing attribution in the apps. Unconfirmed (issue).
+- **Scheduling:** `tvdb-sync` has only been run by hand; hourly scheduling waits for deployment (issue).
+- **Sync gaps:** a change that only touches translations can take up to 30 days to arrive (the safety net); series merges (`mergeToId`) are not handled; neither was seen in real data (issue).
+- **Per-instance shortcuts:** the search cache is in memory per instance and two simultaneous first opens of one series both fetch it (harmless; issue).
+- **For M3:** deleting a series cascades to everything under it. Before watch history exists, decide whether a TheTVDB deletion should be soft, and how a merged series moves its followers.
+- The dev database now holds three series from my testing (Breaking Bad, La casa de papel, The Simpsons); they are just cache and refresh themselves.
 
 ## Change log
 - 2026-11-19: Initial spec (@mauro)

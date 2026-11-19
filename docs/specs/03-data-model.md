@@ -30,14 +30,9 @@ SyncState (TheTVDB /updates cursor)
 
 | Table | Milestone | Key columns / rules |
 |---|---|---|
-| `series` | M2 | `id` = TheTVDB id (bigint); `name`; `slug`; `overview`; `image`; `status` (continuing / ended / upcoming); `first_aired`, `last_aired`, `next_aired`; `airs_time`; `country`; `network`; `average_runtime`; `score`; `synced_at` |
-| `genre`, `series_genre` | M2 | `genre.id` = TheTVDB id |
-| `season` | M2 | `id` = TheTVDB id; `series_id`; `number`; default season type only |
-| `episode` | M2 | `id` = TheTVDB id; `series_id`; `season_number`; `number`; `name`; `overview`; `aired_date`; `runtime`; `image` |
 | `follow` | M3 | PK `(user_id, series_id)`; `state` (watching / planned / paused / dropped); `notify` bool; `created_at` |
 | `episode_watch` | M3 | PK `(user_id, episode_id)`; `watched_at` is set by the client or an import, not `now()`, so imported history keeps its real dates; no rewatches in v1 |
 | `notification` | M4 | `id`; `user_id`; `kind`; `series_id`; `episode_id`; `created_at`; `sent_at`; `read_at`; a unique dedupe key so a job re-run never notifies twice |
-| `sync_state` | M4 | `key` PK, `value` — holds the TheTVDB `/updates` cursor |
 | `post` | M5 | `id`; `episode_id`; `user_id`; `parent_id` (null = top level; replies are one level deep); `body`; `giphy_id`; `created_at`, `edited_at`, `deleted_at`; `hidden` |
 | `post_reaction` | M5 | PK `(post_id, user_id, kind)` |
 | `post_report` | M5 | PK `(post_id, reporter_id)`; `reason` |
@@ -87,6 +82,22 @@ Single-use tokens in verification and password-reset emails.
 | `consumed_at` | timestamptz | set when used, or when a newer token of the same purpose supersedes it |
 
 Index: `(user_id, purpose, created_at DESC)`.
+
+### Catalog tables (migration 5)
+TheTVDB's data for the series someone has opened. Ids are TheTVDB's own (`bigint`), so sync and later features need no mapping table. Everything under `series` cascades from it.
+
+| Table | Key columns / rules |
+|---|---|
+| `series` | `id`; `slug`; `original_name`, `original_overview`, `original_language`/`original_country` (TheTVDB's three-letter codes); `image`; `status` (`continuing`, `ended`, `upcoming`, `unknown`); `first_aired`, `last_aired`, `next_aired` (dates); `airs_time` (local to the country), `airs_days` (text[]); `network`; `average_runtime` (0 = unknown); `tvdb_updated_at`; `synced_at` (indexed, drives the 30-day safety net) |
+| `series_translation` | PK `(series_id, language)`, `language` in `en`, `es`; `name`, `overview` |
+| `genre` | `id`, English `name`, `slug`; shared by series. Spanish names are mapped in code. |
+| `series_genre` | PK `(series_id, genre_id)` |
+| `season` | `id`; `(series_id, number)` unique; `name`, `image`; default season order only; number 0 = specials |
+| `episode` | `id`; `series_id`, `season_number`, `number`, `absolute_number`; `original_name`, `original_overview`; `aired` (date, null while unannounced); `runtime`; `image`; `finale_type`. **Upserted by id** on every refresh and only vanished episodes are deleted, so later references survive. Index `(series_id, season_number, number)` and a partial index on `aired`. |
+| `episode_translation` | PK `(episode_id, language)`; `name`, `overview` |
+| `sync_state` | `key` PK, `value`, `updated_at`; holds the `tvdb-sync` cursor |
+
+`users` also gained `language` (`en` default, `es`; CHECK).
 
 ### `oauth_account` (uuid PK, migration 4)
 A Sign in with Apple / Google identity linked to a user.
@@ -139,3 +150,4 @@ Postgres `text` columns with `CHECK` constraints, mirrored as enums in the OpenA
 | 2 | `00002_auth.sql` | `users`, `refresh_token` and their indexes |
 | 3 | `00003_email_token.sql` | `email_token` (verification and reset tokens) |
 | 4 | `00004_social_and_devices.sql` | `oauth_account`, `device` |
+| 5 | `00005_catalog.sql` | `series`, translations, genres, seasons, episodes, `sync_state`, `users.language` |

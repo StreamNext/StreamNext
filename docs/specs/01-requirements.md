@@ -10,6 +10,10 @@ Go backend skeleton with `GET /v1/health`, sops secrets, goose migrations, 90% c
 Email and password, Sign in with Apple, Google sign-in; 15-minute access JWTs with rotating, device-bound refresh tokens and theft detection; email verification, password reset, change-password, account deletion; push-token registration. Implemented in three slices (Backend 0.2.0 to 0.4.0). Not yet exercised with real Apple/Google tokens or a real mail provider.
 → [Feature spec](features/auth.md)
 
+### M2 — Catalog
+Search, series detail and episodes from TheTVDB in English or Spanish per the user's profile language. A series is fetched when first opened and stored in Postgres; the API never refreshes it. A separate `tvdb-sync` job (`make tvdb-sync`, hourly once deployed) applies TheTVDB's updates feed to stored series. Verified against the real API.
+→ [Feature spec](features/catalog.md)
+
 <!-- Each further entry, once a feature ships, should look like:
 
 ### Feature name
@@ -20,9 +24,6 @@ One or two sentences describing what's implemented and its key business rule.
 ## Planned
 
 Backend milestones, in build order. Each gets a `docs/features/*.md` spec via `/spec` right before it is implemented.
-
-### M2 — Catalog
-Show search (TheTVDB proxy) and series detail with seasons and episodes, read through and cached in Postgres, in English and Spanish per the user's profile language. Stored series are served from Postgres only; a separate hourly `tvdb-sync` job applies TheTVDB's `/updates` to them. → [Feature spec](../features/catalog.md)
 
 ### M3 — Tracking
 Follow and unfollow shows with a list state (watching, planned, paused, dropped). Mark an episode, a season, or everything up to an episode as watched, and unwatch. "Up next" per show and across all shows, plus an upcoming-episodes calendar.
